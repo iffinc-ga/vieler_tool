@@ -1077,8 +1077,8 @@ function getBaseTariff(htsCode){
 
 function makeSteelAlumPart(baseTariff, kind){
   const t = String(baseTariff || '').trim();
-  if(!t) return (kind === 'Steel' ? 'STEEL GENERIC' : 'ALUM GENERIC');
-  return (kind === 'Steel' ? 'STEEL ' : 'ALUM ') + t;
+  if(!t) return (kind === 'Steel' ? 'STEEL GENERIC' : 'ALUMINUM GENERIC');
+  return (kind === 'Steel' ? 'STEEL ' : 'ALUMINUM ') + t;
 }
 
 
