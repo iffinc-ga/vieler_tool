@@ -113,7 +113,7 @@
     <span class="db-status db-loading" id="dbStatus">Loading database from repository...</span>
     <button class="btn-light" id="retryDbBtn" title="Retry loading from GitHub">Retry Load</button>
     <button class="btn-warning" id="offlineBtn" title="Skip DB load and work offline">Work Offline</button>
-    <div class="db-info" id="dbInfo">Fetching updated_vieler_db.xlsx from GitHub…</div>
+    <div class="db-info" id="dbInfo">Fetching updated_vieler.xlsx from GitHub…</div>
   </div>
 
   <div class="upload-section" id="uploadSection">
@@ -714,11 +714,11 @@
       tr.innerHTML = `
         <td class="col-line">${row.line_number || idx + 1}</td>
         <td class="col-article"><input type="text" value="${row.article_number || ''}" onchange="updateCell(${idx}, 'article_number', this.value)"></td>
-        <td class="col-desc"><input type="text" value="${row.description || ''}" onchange="updateCell(${idx}, 'description', this.value)"></td>
-        <td class="col-qty"><input type="number" step="0.01" value="${row.quantity || 0}" onchange="updateCell(${idx}, 'quantity', parseFloat(this.value))"></td>
-        <td class="col-unit"><input type="text" value="${(!row.unit || String(row.unit).toLowerCase()==='ne') ? 'PCS' : row.unit}" onchange="updateCell(${idx}, 'unit', this.value)"></td>
+            <td class="col-desc"><input type="text" value="${mat.description || ''}" oninput="updateMaterialField(${idx}, ${matIdx}, 'description', this.value)"></td>
+            <td class="col-qty"><input type="number" step="0.001" value="${mat.kg != null ? mat.kg : ''}" oninput="updateMaterialField(${idx}, ${matIdx}, 'kg', parseFloat(this.value))"></td>
+            <td class="col-unit"><input type="text" value="${mat.unit || 'KG'}" oninput="updateMaterialField(${idx}, ${matIdx}, 'unit', this.value)"></td>
         <td class="col-price"><input type="number" step="0.01" value="${row.unit_price || 0}" onchange="updateCell(${idx}, 'unit_price', parseFloat(this.value))"></td>
-        <td class="col-total"><input type="number" step="0.01" value="${row.line_total || 0}" onchange="updateCell(${idx}, 'line_total', parseFloat(this.value))"></td>
+            <td class="col-total"><input type="number" step="0.01" value="${mat.value != null ? mat.value : ''}" oninput="updateMaterialField(${idx}, ${matIdx}, 'value', parseFloat(this.value))"></td>
         <td class="col-weight"><input type="number" step="0.001" value="${row.net_weight_pc || 0}" onchange="updateCell(${idx}, 'net_weight_pc', parseFloat(this.value))"></td>
         <td class="col-country"><input type="text" value="${row.country || ''}" onchange="updateCell(${idx}, 'country', this.value)"></td>
         <td class="col-actions actions">
@@ -1609,13 +1609,15 @@ function exportToDescartesAll(){
           const kgRounded = roundUpKgMin1(mat.kg);
           r.Quantity = kgRounded;
           r.UnitOfMeasure = 'KG';
-          r.Description = `${mat.type} content for ${String(item.article_nuconst exportVal = (mat.__export_value != null ? mat.__export_value : (mat.value != null ? mat.value : ''));
+          r.Description = `${mat.type} content for ${String(item.article_number || '').trim()}`;
+          const exportVal = (mat.__export_value != null ? mat.__export_value : (mat.value != null ? mat.value : ''));
           r.ItemTotal = exportVal;
           const mup = computeUnitPrice(exportVal, kgRounded);
           r.UnitPrice = mup === '' ? '' : mup;
           r.NetWeight = kgRounded;
 
-ull ? mat.kg : '');
+          r.GrossWeight = kgRounded;
+          r.GrossWeightUnit = 'KG';
           r.CountryOfOrigin = String(item.country || '').trim();
           r.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
           exportRows.push(r);
@@ -1813,7 +1815,7 @@ ull ? mat.kg : '');
     owner: 'iffinc-ga',
     repo: 'vieler_tool',
     branch: 'main',
-    filePath: 'updated_vieler.xlsx'
+    filePath: 'updated_vieler_db.xlsx'
   };
 
   const dbStatusEl = document.getElementById('dbStatus');
@@ -1848,7 +1850,7 @@ ull ? mat.kg : '');
   async function loadDatabaseFromGitHub() {
     const { owner, repo, branch, filePath } = GITHUB_CONFIG;
     const remoteUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
-    const localUrl = './updated_vieler.xlsx';
+    const localUrl = './updated_vieler_db.xlsx';
 
     setDbBanner('loading', 'Loading database...', 'Trying GitHub (8s timeout)…');
     try {
@@ -1858,7 +1860,7 @@ ull ? mat.kg : '');
       return;
     } catch (err1) {
       console.warn('[DB] GitHub load failed:', err1?.message || err1);
-      setDbBanner('loading', 'Retrying from local file…', 'Looking for ./updated_vieler.xlsx');
+      setDbBanner('loading', 'Retrying from local file…', 'Looking for ./updated_vieler_db.xlsx');
       try {
         const wb2 = await fetchAndReadWorkbook(localUrl, false);
         await hydrateDbsFromWorkbook(wb2);
