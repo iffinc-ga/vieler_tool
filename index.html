@@ -746,8 +746,12 @@
           // Determine the part number to display
           let displayPartNumber = row.article_number;
           if (is100Percent && mat.kg > 0) {
-            const matType = mat.type === 'Aluminium' ? 'Alum' : mat.type;
-            displayPartNumber = `All ${matType} - ${row.article_number}`;
+            // For 100% materials, show "ALL STEEL {baseHTS}" or "ALL ALUMINUM {baseHTS}"
+            const baseHTSFromDb = getBaseHTSFromDb(row.article_number);
+            const baseTariff = getBaseTariff(row.hts_code);
+            const baseHTSToUse = baseHTSFromDb || baseTariff || normalizeTariffDigits(row.hts_code);
+            const matType = mat.type === 'Aluminium' ? 'ALUMINUM' : mat.type.toUpperCase();
+            displayPartNumber = `ALL ${matType} ${baseHTSToUse}`;
           }
           
           const matTr = document.createElement('tr');
@@ -1079,6 +1083,49 @@ function makeSteelAlumPart(baseTariff, kind){
   const t = String(baseTariff || '').trim();
   if(!t) return (kind === 'Steel' ? 'STEEL GENERIC' : 'ALUMINUM GENERIC');
   return (kind === 'Steel' ? 'STEEL ' : 'ALUMINUM ') + t;
+}
+
+function getBaseHTSFromDb(articleNumber){
+  // Look up article number in vielerDb and return the base HTS (not starting with 98 or 99)
+  if(!vielerDb || !vielerDb.length) {
+    console.log(`[DB Lookup] Database not loaded, cannot lookup article ${articleNumber}`);
+    return '';
+  }
+  
+  const artNum = String(articleNumber || '').trim();
+  if(!artNum) return '';
+  
+  // Find matching record in database
+  const dbRecord = vielerDb.find(rec => {
+    const dbArt = String(rec['Article Number'] || rec['article_number'] || rec['Article'] || '').trim();
+    return dbArt === artNum;
+  });
+  
+  if(!dbRecord) {
+    console.log(`[DB Lookup] Article ${artNum} not found in database`);
+    return '';
+  }
+  
+  // Get HTS code from database (try different possible column names)
+  const htsRaw = dbRecord['HTS Code'] || dbRecord['hts_code'] || dbRecord['HTS'] || dbRecord['Tariff'] || '';
+  const htsStr = String(htsRaw).trim();
+  
+  if(!htsStr) {
+    console.log(`[DB Lookup] Article ${artNum} found but has no HTS code in database`);
+    return '';
+  }
+  
+  // Parse HTS - could be comma/semicolon separated
+  const htsCandidates = htsStr.split(/[,;\s]+/).map(x => normalizeTariffDigits(x)).filter(Boolean);
+  
+  // Find first HTS that doesn't start with 98 or 99
+  const baseHTS = htsCandidates.find(hts => {
+    const digits = hts.replace(/[^0-9]/g, '');
+    return digits.length >= 10 && !digits.startsWith('98') && !digits.startsWith('99');
+  });
+  
+  console.log(`[DB Lookup] Article ${artNum}: Found HTS candidates [${htsCandidates.join(', ')}], Base HTS: ${baseHTS || 'NONE'}`);
+  return baseHTS || '';
 }
 
 
@@ -1452,13 +1499,17 @@ function exportToDescartesAll(){
       }
     }
 
-    // If 100% material, export ONE line with "All Steel/Alum - {part}" and original values
+    // If 100% material, export ONE line with "ALL STEEL {baseHTS}" or "ALL ALUMINUM {baseHTS}" and original values
     if (is100PercentMaterial) {
       const base = buildDescartesRowSkeleton(commonMeta);
       const partNum = String(item.article_number || '').trim();
       
-      base.BuyerPartNumber = `All ${is100PercentMaterial} - ${partNum}`;
-      base.SupplierPartNumber = `All ${is100PercentMaterial} - ${partNum}`;
+      // Look up base HTS from database
+      const baseHTSFromDb = getBaseHTSFromDb(item.article_number);
+      const baseHTSToUse = baseHTSFromDb || baseTariff || normalizeTariffDigits(item.hts_code);
+      
+      base.BuyerPartNumber = partNum;  // Keep original part number in BuyerPartNumber
+      base.SupplierPartNumber = `ALL ${is100PercentMaterial === 'Steel' ? 'STEEL' : 'ALUMINUM'} ${baseHTSToUse}`;
       base.Quantity = (item.quantity != null ? item.quantity : '');
       base.UnitOfMeasure = String(item.unit || 'EA');
       base.Description = String(item.description || '').trim();
