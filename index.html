@@ -714,11 +714,11 @@
       tr.innerHTML = `
         <td class="col-line">${row.line_number || idx + 1}</td>
         <td class="col-article"><input type="text" value="${row.article_number || ''}" onchange="updateCell(${idx}, 'article_number', this.value)"></td>
-            <td class="col-desc"><input type="text" value="${mat.description || ''}" oninput="updateMaterialField(${idx}, ${matIdx}, 'description', this.value)"></td>
-            <td class="col-qty"><input type="number" step="0.001" value="${mat.kg != null ? mat.kg : ''}" oninput="updateMaterialField(${idx}, ${matIdx}, 'kg', parseFloat(this.value))"></td>
-            <td class="col-unit"><input type="text" value="${mat.unit || 'KG'}" oninput="updateMaterialField(${idx}, ${matIdx}, 'unit', this.value)"></td>
+        <td class="col-desc"><input type="text" value="${row.description || ''}" onchange="updateCell(${idx}, 'description', this.value)"></td>
+        <td class="col-qty"><input type="number" step="0.01" value="${row.quantity || 0}" onchange="updateCell(${idx}, 'quantity', parseFloat(this.value))"></td>
+        <td class="col-unit"><input type="text" value="${(!row.unit || String(row.unit).toLowerCase()==='ne') ? 'PCS' : row.unit}" onchange="updateCell(${idx}, 'unit', this.value)"></td>
         <td class="col-price"><input type="number" step="0.01" value="${row.unit_price || 0}" onchange="updateCell(${idx}, 'unit_price', parseFloat(this.value))"></td>
-            <td class="col-total"><input type="number" step="0.01" value="${mat.value != null ? mat.value : ''}" oninput="updateMaterialField(${idx}, ${matIdx}, 'value', parseFloat(this.value))"></td>
+        <td class="col-total"><input type="number" step="0.01" value="${row.line_total || 0}" onchange="updateCell(${idx}, 'line_total', parseFloat(this.value))"></td>
         <td class="col-weight"><input type="number" step="0.001" value="${row.net_weight_pc || 0}" onchange="updateCell(${idx}, 'net_weight_pc', parseFloat(this.value))"></td>
         <td class="col-country"><input type="text" value="${row.country || ''}" onchange="updateCell(${idx}, 'country', this.value)"></td>
         <td class="col-actions actions">
@@ -1355,36 +1355,6 @@ function computeUnitPrice(total, qty){
   return '';
 }
 
-
-function computeNetWeight(perPieceKg, qty){
-  const pp = Number(perPieceKg);
-  const q = Number(qty);
-  if(isFinite(pp) && isFinite(q) && q > 0 && pp >= 0){
-    // Keep 3 decimals like the UI's net_weight_pc precision
-    return Number((pp * q).toFixed(3));
-  }
-  return '';
-}
-
-
-// Allocate material value from a % of the parent line total (rounded to 2 decimals)
-function computeMaterialValueFromPercent(parentLineTotal, pct){
-  const total = Number(parentLineTotal);
-  const p = Number(pct);
-  if(isFinite(total) && isFinite(p)){
-    return Number((total * (p/100)).toFixed(2));
-  }
-  return '';
-}
-
-// Round up kg to nearest whole kg, but minimum 1 kg
-function roundUpKgMin1(kg){
-  const v = Number(kg);
-  if(!isFinite(v) || v <= 0) return 1;
-  return Math.max(1, Math.ceil(v));
-}
-
-
 function buildDescartesRowSkeleton(meta){
   return {
     InvoiceNumber: meta.invoice_number || '',
@@ -1546,7 +1516,7 @@ function exportToDescartesAll(){
       base.ItemTotal = (item.line_total != null ? item.line_total : '');
       const up = computeUnitPrice(item.line_total, item.quantity);
       base.UnitPrice = up === '' ? '' : up;
-      base.NetWeight = computeNetWeight(item.net_weight_pc, item.quantity);
+      base.NetWeight = (((item.quantity||0) * (item.net_weight_pc||0)) ? ((item.quantity||0) * (item.net_weight_pc||0)) : '');
       base.CountryOfOrigin = String(item.country || '').trim();
       base.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
       exportRows.push(base);
@@ -1561,35 +1531,46 @@ function exportToDescartesAll(){
       base.UnitOfMeasure = String(item.unit || 'EA');
       base.Description = String(item.description || '').trim();
 
-      // If this line has Steel/Aluminium content rows with percentages, allocate ItemTotal
-      // so that each content row gets its % of the original line_total and the base row is reduced accordingly.
-      const parentLineTotalNum = Number(item.line_total);
-      let allocatedSum = 0;
+      // Compute TOTAL net weight for this line (kg): (weight per piece) * (pieces)
+      const totalNetWeightKg = (item.quantity || 0) * (item.net_weight_pc || 0);
+      base.NetWeight = (totalNetWeightKg ? totalNetWeightKg : '');
 
-      if(item.materials && item.materials.length && isFinite(parentLineTotalNum)){
-        item.materials.forEach(m=>{
-          if(m.type !== 'Steel' && m.type !== 'Aluminium') return;
-          const pctNum = Number(m.percentage);
-          if(isFinite(pctNum) && pctNum > 0){
-            const v = computeMaterialValueFromPercent(parentLineTotalNum, pctNum);
-            if(isFinite(v)){
-              m.__export_value = v;
-              allocatedSum += v;
-            }
-          }
-        });
+      // Allocate ItemTotal to Steel/Aluminium rows based on percentage, and reduce base accordingly.
+      const lineTotal = (item.line_total != null ? Number(item.line_total) : NaN);
+      const qty = (item.quantity != null ? Number(item.quantity) : NaN);
+
+      let steelPct = null;
+      let alumPct  = null;
+      if (item.materials && item.materials.length) {
+        const steelMat = item.materials.find(m => m.type === 'Steel');
+        const alumMat  = item.materials.find(m => m.type === 'Aluminium');
+        if (steelMat && steelMat.percentage != null && steelMat.percentage !== '') steelPct = Number(steelMat.percentage);
+        if (alumMat  && alumMat.percentage  != null && alumMat.percentage  !== '') alumPct  = Number(alumMat.percentage);
       }
 
-      let baseTotal = (item.line_total != null ? Number(item.line_total) : '');
-      if(isFinite(parentLineTotalNum) && allocatedSum > 0){
-        baseTotal = Number((parentLineTotalNum - allocatedSum).toFixed(2));
-        if(baseTotal < 0) baseTotal = 0;
+      function round2(n){
+        if (n == null || !isFinite(n)) return '';
+        return Math.round(n * 100) / 100;
       }
 
-      base.ItemTotal = (baseTotal === '' ? '' : baseTotal);
-      const up = computeUnitPrice(baseTotal, item.quantity);
-      base.UnitPrice = up === '' ? '' : up;
-      base.NetWeight = computeNetWeight(item.net_weight_pc, item.quantity);
+      let steelAlloc = '';
+      let alumAlloc = '';
+      if (isFinite(lineTotal)) {
+        if (steelPct != null && isFinite(steelPct) && steelPct > 0) steelAlloc = round2(lineTotal * (steelPct/100));
+        if (alumPct  != null && isFinite(alumPct)  && alumPct  > 0) alumAlloc  = round2(lineTotal * (alumPct/100));
+      }
+
+      let baseAlloc = (item.line_total != null ? item.line_total : '');
+      if (isFinite(lineTotal)) {
+        const sumAlloc = (steelAlloc !== '' ? steelAlloc : 0) + (alumAlloc !== '' ? alumAlloc : 0);
+        baseAlloc = round2(lineTotal - sumAlloc);
+        if (baseAlloc !== '' && baseAlloc < 0) baseAlloc = 0;
+      }
+
+      base.ItemTotal = baseAlloc;
+      const upBase = computeUnitPrice(baseAlloc, item.quantity);
+      base.UnitPrice = upBase === '' ? '' : upBase;
+
       base.CountryOfOrigin = String(item.country || '').trim();
       base.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
       exportRows.push(base);
@@ -1606,18 +1587,36 @@ function exportToDescartesAll(){
 
           r.BuyerPartNumber = part;
           r.SupplierPartNumber = part;
-          const kgRounded = roundUpKgMin1(mat.kg);
-          r.Quantity = kgRounded;
-          r.UnitOfMeasure = 'KG';
-          r.Description = `${mat.type} content for ${String(item.article_number || '').trim()}`;
-          const exportVal = (mat.__export_value != null ? mat.__export_value : (mat.value != null ? mat.value : ''));
-          r.ItemTotal = exportVal;
-          const mup = computeUnitPrice(exportVal, kgRounded);
-          r.UnitPrice = mup === '' ? '' : mup;
-          r.NetWeight = kgRounded;
 
-          r.GrossWeight = kgRounded;
-          r.GrossWeightUnit = 'KG';
+          // Weight for content lines: round UP to whole KG, minimum 1 KG.
+          // Prefer parsed mat.kg; otherwise derive from percentage of total line weight.
+          let matKg = (mat.kg != null && mat.kg !== '' ? Number(mat.kg) : NaN);
+          if (!isFinite(matKg) || matKg <= 0) {
+            const pct = (mat.percentage != null && mat.percentage !== '' ? Number(mat.percentage) : NaN);
+            if (isFinite(pct) && pct > 0) matKg = totalNetWeightKg * (pct/100);
+          }
+          let matKgRounded = '';
+          if (isFinite(matKg) && matKg > 0) {
+            matKgRounded = Math.max(1, Math.ceil(matKg));
+          }
+
+          r.Quantity = (matKgRounded !== '' ? matKgRounded : '');
+          r.UnitOfMeasure = 'KG';
+          r.Description = `${mat.type} content for ${String(item.article_number||'').trim()}`;
+
+          // Allocate ItemTotal based on percentage of the original line total
+          let alloc = '';
+          if (isFinite(lineTotal)) {
+            const pct = (mat.type === 'Steel' ? steelPct : alumPct);
+            if (pct != null && isFinite(pct) && pct > 0) alloc = round2(lineTotal * (pct/100));
+          }
+          // Fallback to parsed value if no percentage allocation available
+          if (alloc === '' && mat.value != null && mat.value !== '' && isFinite(Number(mat.value))) alloc = round2(Number(mat.value));
+
+          r.ItemTotal = (alloc !== '' ? alloc : '');
+          const mup = computeUnitPrice(r.ItemTotal, r.Quantity);
+          r.UnitPrice = mup === '' ? '' : mup;
+          r.NetWeight = (matKgRounded !== '' ? matKgRounded : '');
           r.CountryOfOrigin = String(item.country || '').trim();
           r.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
           exportRows.push(r);
