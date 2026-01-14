@@ -1355,6 +1355,36 @@ function computeUnitPrice(total, qty){
   return '';
 }
 
+
+function computeNetWeight(perPieceKg, qty){
+  const pp = Number(perPieceKg);
+  const q = Number(qty);
+  if(isFinite(pp) && isFinite(q) && q > 0 && pp >= 0){
+    // Keep 3 decimals like the UI's net_weight_pc precision
+    return Number((pp * q).toFixed(3));
+  }
+  return '';
+}
+
+
+// Allocate material value from a % of the parent line total (rounded to 2 decimals)
+function computeMaterialValueFromPercent(parentLineTotal, pct){
+  const total = Number(parentLineTotal);
+  const p = Number(pct);
+  if(isFinite(total) && isFinite(p)){
+    return Number((total * (p/100)).toFixed(2));
+  }
+  return '';
+}
+
+// Round up kg to nearest whole kg, but minimum 1 kg
+function roundUpKgMin1(kg){
+  const v = Number(kg);
+  if(!isFinite(v) || v <= 0) return 1;
+  return Math.max(1, Math.ceil(v));
+}
+
+
 function buildDescartesRowSkeleton(meta){
   return {
     InvoiceNumber: meta.invoice_number || '',
@@ -1516,7 +1546,7 @@ function exportToDescartesAll(){
       base.ItemTotal = (item.line_total != null ? item.line_total : '');
       const up = computeUnitPrice(item.line_total, item.quantity);
       base.UnitPrice = up === '' ? '' : up;
-      base.NetWeight = (item.net_weight_pc != null ? item.net_weight_pc : '');
+      base.NetWeight = computeNetWeight(item.net_weight_pc, item.quantity);
       base.CountryOfOrigin = String(item.country || '').trim();
       base.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
       exportRows.push(base);
@@ -1530,10 +1560,36 @@ function exportToDescartesAll(){
       base.Quantity = (item.quantity != null ? item.quantity : '');
       base.UnitOfMeasure = String(item.unit || 'EA');
       base.Description = String(item.description || '').trim();
-      base.ItemTotal = (item.line_total != null ? item.line_total : '');
-      const up = computeUnitPrice(item.line_total, item.quantity);
+
+      // If this line has Steel/Aluminium content rows with percentages, allocate ItemTotal
+      // so that each content row gets its % of the original line_total and the base row is reduced accordingly.
+      const parentLineTotalNum = Number(item.line_total);
+      let allocatedSum = 0;
+
+      if(item.materials && item.materials.length && isFinite(parentLineTotalNum)){
+        item.materials.forEach(m=>{
+          if(m.type !== 'Steel' && m.type !== 'Aluminium') return;
+          const pctNum = Number(m.percentage);
+          if(isFinite(pctNum) && pctNum > 0){
+            const v = computeMaterialValueFromPercent(parentLineTotalNum, pctNum);
+            if(isFinite(v)){
+              m.__export_value = v;
+              allocatedSum += v;
+            }
+          }
+        });
+      }
+
+      let baseTotal = (item.line_total != null ? Number(item.line_total) : '');
+      if(isFinite(parentLineTotalNum) && allocatedSum > 0){
+        baseTotal = Number((parentLineTotalNum - allocatedSum).toFixed(2));
+        if(baseTotal < 0) baseTotal = 0;
+      }
+
+      base.ItemTotal = (baseTotal === '' ? '' : baseTotal);
+      const up = computeUnitPrice(baseTotal, item.quantity);
       base.UnitPrice = up === '' ? '' : up;
-      base.NetWeight = (item.net_weight_pc != null ? item.net_weight_pc : '');
+      base.NetWeight = computeNetWeight(item.net_weight_pc, item.quantity);
       base.CountryOfOrigin = String(item.country || '').trim();
       base.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
       exportRows.push(base);
@@ -1550,13 +1606,16 @@ function exportToDescartesAll(){
 
           r.BuyerPartNumber = part;
           r.SupplierPartNumber = part;
-          r.Quantity = (mat.kg != null ? mat.kg : '');
+          const kgRounded = roundUpKgMin1(mat.kg);
+          r.Quantity = kgRounded;
           r.UnitOfMeasure = 'KG';
-          r.Description = `${mat.type} content for ${String(item.article_number||'').trim()}`;
-          r.ItemTotal = (mat.value != null ? mat.value : '');
-          const mup = computeUnitPrice(mat.value, mat.kg);
+          r.Description = `${mat.type} content for ${String(item.article_nuconst exportVal = (mat.__export_value != null ? mat.__export_value : (mat.value != null ? mat.value : ''));
+          r.ItemTotal = exportVal;
+          const mup = computeUnitPrice(exportVal, kgRounded);
           r.UnitPrice = mup === '' ? '' : mup;
-          r.NetWeight = (mat.kg != null ? mat.kg : '');
+          r.NetWeight = kgRounded;
+
+ull ? mat.kg : '');
           r.CountryOfOrigin = String(item.country || '').trim();
           r.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
           exportRows.push(r);
