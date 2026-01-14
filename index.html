@@ -23,9 +23,9 @@
     .controls{padding:20px;background:#f8f9fa;border-bottom:1px solid #dee2e6;display:none;position:sticky;top:0;z-index:100}
     .controls select{padding:10px;border:1px solid #ced4da;border-radius:4px;font-size:14px;min-width:400px;margin-right:10px}
     .controls button{padding:10px 20px;border:none;border-radius:4px;font-weight:600;cursor:pointer;margin-right:10px}
-    .btn-success{background:#28a745;color:#fff}.btn-success:hover{background:#218838}
+    .btn-success{background:#17a2b8;color:#fff}.btn-success:hover{background:#138496}
     .btn-primary{background:#007bff;color:#fff}.btn-primary:hover{background:#0056b3}
-    .btn-danger{background:#dc3545;color:#fff}.btn-danger:hover{background:#c82333}
+    .btn-danger{background:#fd7e14;color:#fff}.btn-danger:hover{background:#e8590c}
     .btn-info{background:#17a2b8;color:#fff}.btn-info:hover{background:#138496}
     .btn-warning{background:#ffc107;color:#212529}.btn-warning:hover{background:#e0a800}
     .btn-light{background:#f8f9fa;color:#212529;border:1px solid #ced4da}
@@ -56,6 +56,9 @@
     .table-body td input:focus,.table-body td select:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.15)}
     .readonly{background:#e9ecef!important}
     .actions{text-align:center}
+    .actions-wrap{display:flex;gap:6px;justify-content:center;align-items:center}
+    .actions-wrap button{width:34px;min-width:34px;padding:6px 0}
+
     .actions button{padding:4px 8px;font-size:11px;margin:0 2px}
     .inline-help{font-size:12px;color:#6c757d;margin-left:8px}
     .alert{padding:15px;margin:20px;border-radius:4px;display:none}
@@ -80,13 +83,22 @@
     .col-total{width:85px!important}
     .col-weight{width:75px!important}
     .col-country{width:75px!important}
+    .col-hts,.col-material,.col-mat-kg,.col-mat-pct,.col-mat-val,.col-origin{display:none!important}
+
     .col-hts{width:100px!important}
     .col-material{width:110px!important}
     .col-mat-kg{width:85px!important}
     .col-mat-pct{width:70px!important}
     .col-mat-val{width:90px!important}
     .col-origin{width:150px!important}
-    .col-actions{width:100px!important}
+    .col-actions{width:150px!important}
+  
+    /* Hide material + origin columns per request */
+    th.col-material, td.col-material,
+    th.col-mat-kg, td.col-mat-kg,
+    th.col-mat-pct, td.col-mat-pct,
+    th.col-mat-val, td.col-mat-val,
+    th.col-origin, td.col-origin{display:none!important}
   </style>
 </head>
 <body>
@@ -122,10 +134,9 @@
   <div class="controls" id="controls">
     <select id="invoiceSelect"><option value="">Select an invoice...</option></select>
     <button class="btn-warning" onclick="undoLast()" title="Undo last action">↩️ Undo</button>
-    <button class="btn-success" onclick="exportToIES()">📋 Export to IES Template</button>
-    <button class="btn-info" onclick="duplicateMaterialLines()">🔄 Duplicate Material Lines</button>
-    <button class="btn-primary" onclick="resetUpload()">📤 New Upload</button>
-    <span class="inline-help">Yellow rows show Aluminium/Steel/Copper breakdowns (editable). "Duplicate" creates separate line items.</span>
+    <button class="btn-success" onclick="exportToDescartesAll()">📤 Export to Descartes Template (All Invoices)</button>
+            <button class="btn-primary" onclick="resetUpload()">📤 New Upload</button>
+    <span class="inline-help">Yellow rows show Aluminium/Steel/Copper lines (editable). Use ➕ Below to insert rows like the Grass tool.</span>
   </div>
 
   <div class="stats" id="stats">
@@ -150,13 +161,7 @@
           <th class="col-price">Unit Price</th>
           <th class="col-total">Line Total</th>
           <th class="col-weight">Net Wt/pc (kg)</th>
-          <th class="col-country">Country</th>
-          <th class="col-hts">HTS Code</th>
-          <th class="col-material">Material</th>
-          <th class="col-mat-kg">Mat. kg</th>
-          <th class="col-mat-pct">Mat. %</th>
-          <th class="col-mat-val">Mat. Value</th>
-          <th class="col-origin">Origin</th>
+          <th class="col-country">Country of Origin</th>
           <th class="col-actions">Actions</th>
         </tr></thead></table>
       </div>
@@ -273,6 +278,7 @@
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       await parseVielerPDF(pdf);
+      postProcessAllData();
       
       loading.style.display = 'none';
       controls.style.display = 'block';
@@ -518,10 +524,10 @@
           if (htsMatch) currentItem.hts_code = htsMatch[1];
         }
         
-        // Country
-        if (line.includes('Country of Manufactur')) {
-          const countryMatch = line.match(/Country\s+of\s+Manufactur(?:e|ing):\s*([A-Za-z\s]+?)(?:\s|$)/i);
-          if (countryMatch) currentItem.country = countryMatch[1].trim();
+        // Country (tolerant of 'Manufacturing', 'Manufacture', and common typo 'Manufactoring')
+        if (line.toLowerCase().includes('country of manufact')) {
+          const countryMatch = line.match(/Country\s+of\s+Manufact\w*\s*:\s*([^\n\r]+)$/i);
+          if (countryMatch) currentItem.country = String(countryMatch[1]).trim();
         }
         
         // Net weight
@@ -710,47 +716,16 @@
         <td class="col-article"><input type="text" value="${row.article_number || ''}" onchange="updateCell(${idx}, 'article_number', this.value)"></td>
         <td class="col-desc"><input type="text" value="${row.description || ''}" onchange="updateCell(${idx}, 'description', this.value)"></td>
         <td class="col-qty"><input type="number" step="0.01" value="${row.quantity || 0}" onchange="updateCell(${idx}, 'quantity', parseFloat(this.value))"></td>
-        <td class="col-unit"><input type="text" value="${row.unit || 'ne'}" onchange="updateCell(${idx}, 'unit', this.value)"></td>
+        <td class="col-unit"><input type="text" value="${(!row.unit || String(row.unit).toLowerCase()==='ne') ? 'PCS' : row.unit}" onchange="updateCell(${idx}, 'unit', this.value)"></td>
         <td class="col-price"><input type="number" step="0.01" value="${row.unit_price || 0}" onchange="updateCell(${idx}, 'unit_price', parseFloat(this.value))"></td>
         <td class="col-total"><input type="number" step="0.01" value="${row.line_total || 0}" onchange="updateCell(${idx}, 'line_total', parseFloat(this.value))"></td>
         <td class="col-weight"><input type="number" step="0.001" value="${row.net_weight_pc || 0}" onchange="updateCell(${idx}, 'net_weight_pc', parseFloat(this.value))"></td>
         <td class="col-country"><input type="text" value="${row.country || ''}" onchange="updateCell(${idx}, 'country', this.value)"></td>
-        <td class="col-hts"><input type="text" value="${row.hts_code || ''}" onchange="updateCell(${idx}, 'hts_code', this.value)"></td>
-        <td class="col-material">
-          ${row.materials && row.materials.length > 0 ? 
-            row.materials.map(m => m.type).join(', ') 
-            : '-'}
-        </td>
-        <td class="col-mat-kg">
-          ${row.materials && row.materials.length > 0 ? 
-            row.materials.map(m => m.kg).join(', ') 
-            : '-'}
-        </td>
-        <td class="col-mat-pct">
-          ${row.materials && row.materials.length > 0 ? 
-            row.materials.map(m => m.percentage + '%').join(', ') 
-            : '-'}
-        </td>
-        <td class="col-mat-val">
-          ${row.materials && row.materials.length > 0 ? 
-            '€' + row.materials.map(m => m.value).join(', €') 
-            : '-'}
-        </td>
-        <td class="col-origin">
-          ${row.materials && row.materials.length > 0 ? 
-            row.materials.map(m => {
-              const parts = [];
-              if (m.smelt) parts.push('S:' + m.smelt);
-              if (m.cast) parts.push('C:' + m.cast);
-              if (m.melt) parts.push('M:' + m.melt);
-              if (m.pour) parts.push('P:' + m.pour);
-              return parts.join(' ');
-            }).join('; ') 
-            : '-'}
-        </td>
         <td class="col-actions actions">
-          <button class="btn-danger" onclick="deleteRow(${idx})">❌</button>
-          <button class="btn-info" onclick="duplicateRow(${idx})">📋</button>
+          <div class="actions-wrap">
+            <button class="btn-success" title="Add row below" onclick="addRowBelow(${idx})">➕</button>
+            <button class="btn-danger" title="Delete row" onclick="deleteRow(${idx})">❌</button>
+          </div>
         </td>
       `;
       tbody.appendChild(tr);
@@ -763,33 +738,37 @@
             return;
           }
           
+          // Check if this material is 100% of the item
+          const totalWeight = (row.quantity || 0) * (row.net_weight_pc || 0);
+          const tolerance = totalWeight * 0.02; // 2% tolerance
+          const is100Percent = (mat.percentage >= 100 || Math.abs(mat.kg - totalWeight) < tolerance);
+          
+          // Determine the part number to display
+          let displayPartNumber = row.article_number;
+          if (is100Percent && mat.kg > 0) {
+            const matType = mat.type === 'Aluminium' ? 'Alum' : mat.type;
+            displayPartNumber = `All ${matType} - ${row.article_number}`;
+          }
+          
           const matTr = document.createElement('tr');
           matTr.className = 'material-line';
           matTr.innerHTML = `
             <td class="col-line">${row.line_number}.${matIdx + 1}</td>
-            <td class="col-article readonly">${row.article_number}</td>
-            <td class="col-desc"><input type="text" value="${mat.type} content" onchange="updateMaterialField(${idx}, ${matIdx}, 'description', this.value)"></td>
-            <td class="col-qty readonly">${row.quantity}</td>
-            <td class="col-unit readonly">${row.unit}</td>
+            <td class="col-article readonly">${displayPartNumber}</td>
+            <td class="col-desc"><input type="text" value="${mat.description || (mat.type + ' content')}" onchange="updateMaterialField(${idx}, ${matIdx}, 'description', this.value)"></td>
+            <td class="col-qty"><input type="number" step="0.001" value="${(mat.kg != null ? mat.kg : '')}" onchange="updateMaterialField(${idx}, ${matIdx}, 'kg', parseFloat(this.value))"></td>
+            <td class="col-unit"><input type="text" value="${mat.unit || 'KG'}" onchange="updateMaterialField(${idx}, ${matIdx}, 'unit', this.value)"></td>
             <td class="col-price readonly">-</td>
             <td class="col-total"><input type="number" step="0.01" value="${mat.value || 0}" onchange="updateMaterialField(${idx}, ${matIdx}, 'value', parseFloat(this.value))"></td>
             <td class="col-weight readonly">${row.net_weight_pc}</td>
-            <td class="col-country readonly">${row.country}</td>
-            <td class="col-hts readonly">${row.hts_code}</td>
-            <td class="col-material"><input type="text" value="${mat.type}" onchange="updateMaterialField(${idx}, ${matIdx}, 'type', this.value)"></td>
-            <td class="col-mat-kg"><input type="number" step="0.001" value="${mat.kg || 0}" onchange="updateMaterialField(${idx}, ${matIdx}, 'kg', parseFloat(this.value))"></td>
-            <td class="col-mat-pct"><input type="number" step="0.01" value="${mat.percentage || 0}" onchange="updateMaterialField(${idx}, ${matIdx}, 'percentage', parseFloat(this.value))"></td>
-            <td class="col-mat-val"><input type="number" step="0.01" value="${mat.value || 0}" onchange="updateMaterialField(${idx}, ${matIdx}, 'value', parseFloat(this.value))"></td>
-            <td class="col-origin"><input type="text" value="${[
-              mat.smelt ? 'S:' + mat.smelt : '',
-              mat.cast ? 'C:' + mat.cast : '',
-              mat.melt ? 'M:' + mat.melt : '',
-              mat.pour ? 'P:' + mat.pour : ''
-            ].filter(Boolean).join(' ')}" onchange="updateMaterialOrigin(${idx}, ${matIdx}, this.value)"></td>
+            <td class="col-country readonly">${row.country || ''}</td>
             <td class="col-actions actions">
-              <button class="btn-danger" onclick="deleteMaterialRow(${idx}, ${matIdx})">❌</button>
+              <div class="actions-wrap">
+                <button class="btn-success" title="Add material row below" onclick="addMaterialRowBelow(${idx}, ${matIdx})">➕</button>
+                <button class="btn-danger" title="Delete material row" onclick="deleteMaterialRow(${idx}, ${matIdx})">❌</button>
+              </div>
             </td>
-          `;
+`;
           tbody.appendChild(matTr);
         });
       }
@@ -856,11 +835,47 @@
     const invoiceData = allData.filter(row => row.invoice_number === currentInvoice);
     if (invoiceData[idx]) {
       invoiceData[idx][field] = value;
+      
+      // If country is updated, also update the country display for all material lines (they're shown as readonly)
+      if (field === 'country') {
+        // Material lines will automatically show the updated country on next render since they reference row.country
+        renderTable();
+      }
+      
       updateStats();
     }
   }
 
-  function updateMaterialField(rowIdx, matIdx, field, value) {
+  
+function addMaterialRowBelow(mainIdxInInvoice, matIdx){
+  const invoiceData = allData.filter(row => row.invoice_number === currentInvoice);
+  const row = invoiceData[mainIdxInInvoice];
+  if(!row) return;
+  row.materials = row.materials || [];
+  const base = row.materials[matIdx] || {type:'Steel', kg:'', unit:'KG', value:0};
+  const clone = {
+    type: base.type || 'Steel',
+    kg: (base.kg != null ? base.kg : ''),
+    unit: base.unit || 'KG',
+    percentage: base.percentage || '',
+    value: base.value || 0,
+    description: base.description || ((base.type || 'Steel') + ' content')
+  };
+  row.materials.splice(matIdx+1, 0, clone);
+  renderTable();
+  updateStats();
+}
+
+function deleteMaterialRow(mainIdxInInvoice, matIdx){
+  const invoiceData = allData.filter(row => row.invoice_number === currentInvoice);
+  const row = invoiceData[mainIdxInInvoice];
+  if(!row || !row.materials) return;
+  row.materials.splice(matIdx, 1);
+  renderTable();
+  updateStats();
+}
+
+function updateMaterialField(rowIdx, matIdx, field, value) {
     pushUndo();
     const invoiceData = allData.filter(row => row.invoice_number === currentInvoice);
     if (invoiceData[rowIdx] && invoiceData[rowIdx].materials && invoiceData[rowIdx].materials[matIdx]) {
@@ -972,6 +987,567 @@
     updateStats();
     showAlert(`Created ${newRows.length} material-specific rows (Aluminium/Steel/Copper only).`, 'success');
   }
+
+/* =================== ADD BELOW (GRASS-LIKE) =================== */
+function normalizeLineNumbersForInvoice(invNum){
+  const items = allData.filter(r => r.invoice_number === invNum);
+  // Preserve current order in allData for this invoice (main rows only)
+  let n = 1;
+  items.forEach(it => { it.line_number = n++; });
+}
+
+function addRowBelow(idx){
+  if(!currentInvoice){
+    showAlert('Please select an invoice first.', 'info');
+    return;
+  }
+  pushUndo();
+  const invoiceData = allData.filter(r => r.invoice_number === currentInvoice);
+  const target = invoiceData[idx];
+  if(!target){
+    showAlert('Could not find target row.', 'danger');
+    return;
+  }
+  const globalIdx = allData.indexOf(target);
+  const meta = invoiceMetadata[currentInvoice] || {};
+  const newRow = {
+    invoice_number: currentInvoice,
+    invoice_date: meta.invoice_date || target.invoice_date || '',
+    invoice_total: meta.invoice_total || target.invoice_total || 0,
+    supplier: target.supplier || 'Vieler International',
+    line_number: null,
+    item_number: '',
+    article_number: '',
+    description: '',
+    quantity: 0,
+    unit: target.unit || 'ne',
+    unit_price: 0,
+    line_total: 0,
+    net_weight_pc: 0,
+    country: target.country || '',
+    hts_code: target.hts_code || '',
+    materials: []
+  };
+  allData.splice(globalIdx + 1, 0, newRow);
+  normalizeLineNumbersForInvoice(currentInvoice);
+  renderTable();
+  updateStats();
+}
+
+function addMaterialBelow(rowIdx, matIdx){
+  if(!currentInvoice){
+    showAlert('Please select an invoice first.', 'info');
+    return;
+  }
+  pushUndo();
+  const invoiceData = allData.filter(r => r.invoice_number === currentInvoice);
+  const parent = invoiceData[rowIdx];
+  if(!parent){
+    showAlert('Could not find parent row.', 'danger');
+    return;
+  }
+  parent.materials = parent.materials || [];
+  const type = (prompt('Material type for new line? (Steel / Aluminium / Copper)', 'Steel') || 'Steel').trim();
+  const safeType = type || 'Steel';
+  const newMat = { type: safeType, kg: 0, percentage: 0, value: 0, smelt:'', cast:'', melt:'', pour:'' };
+  const insertAt = Math.min(parent.materials.length, Math.max(0, matIdx + 1));
+  parent.materials.splice(insertAt, 0, newMat);
+  renderTable();
+  updateStats();
+}
+
+/* =================== DESCARTES EXPORT (ALL INVOICES) =================== */
+function normalizeTariffDigits(val){
+  const s = String(val || '').trim();
+  const digits = s.replace(/[^0-9]/g,'');
+  return digits;
+}
+
+function getBaseTariff(htsCode){
+  // Base tariff = first 10-digit tariff not starting with 98 or 99 (ignore 98/99 chapters)
+  const raw = String(htsCode || '').trim();
+  if(!raw) return '';
+  const candidates = raw.split(/[,;\s]+/).map(x => normalizeTariffDigits(x)).filter(Boolean);
+  // If the HTS has dots, it might come through as one token; the digits extraction handles that.
+  // Prefer 10-digit codes.
+  const ten = candidates.filter(d => d.length >= 10).map(d => d.slice(0,10));
+  const pref = ten.find(d => !(d.startsWith('98') || d.startsWith('99')));
+  return pref || (ten[0] || (candidates[0] ? candidates[0].slice(0,10) : ''));
+}
+
+function makeSteelAlumPart(baseTariff, kind){
+  const t = String(baseTariff || '').trim();
+  if(!t) return (kind === 'Steel' ? 'STEEL GENERIC' : 'ALUM GENERIC');
+  return (kind === 'Steel' ? 'STEEL ' : 'ALUM ') + t;
+}
+
+
+function countryNameToCode(name){
+  const n = String(name||'').trim();
+  if(!n) return '';
+  if(/^[A-Za-z]{2}$/.test(n)) return n.toUpperCase();
+
+  const map = {
+    'AFGHANISTAN':'AF',
+    'ALBANIA':'AL',
+    'ALGERIA':'DZ',
+    'ANDORRA':'AD',
+    'ANGOLA':'AO',
+    'ANTIGUA AND BARBUDA':'AG',
+    'ARGENTINA':'AR',
+    'ARMENIA':'AM',
+    'AUSTRALIA':'AU',
+    'AUSTRIA':'AT',
+    'AZERBAIJAN':'AZ',
+    'BAHAMAS':'BS',
+    'BAHRAIN':'BH',
+    'BANGLADESH':'BD',
+    'BARBADOS':'BB',
+    'BELARUS':'BY',
+    'BELGIUM':'BE',
+    'BELIZE':'BZ',
+    'BENIN':'BJ',
+    'BHUTAN':'BT',
+    'BOLIVIA':'BO',
+    'BOSNIA AND HERZEGOVINA':'BA',
+    'BOTSWANA':'BW',
+    'BRAZIL':'BR',
+    'BRUNEI':'BN',
+    'BULGARIA':'BG',
+    'BURKINA FASO':'BF',
+    'BURUNDI':'BI',
+    'CAMBODIA':'KH',
+    'CAMEROON':'CM',
+    'CANADA':'CA',
+    'CAPE VERDE':'CV',
+    'CENTRAL AFRICAN REPUBLIC':'CF',
+    'CHAD':'TD',
+    'CHILE':'CL',
+    'CHINA':'CN',
+    'COLOMBIA':'CO',
+    'COMOROS':'KM',
+    'CONGO':'CG',
+    'COSTA RICA':'CR',
+    'CROATIA':'HR',
+    'CUBA':'CU',
+    'CYPRUS':'CY',
+    'CZECH REPUBLIC':'CZ',
+    'CZECHIA':'CZ',
+    'DENMARK':'DK',
+    'DEUTSCHLAND':'DE',
+    'DJIBOUTI':'DJ',
+    'DOMINICA':'DM',
+    'DOMINICAN REPUBLIC':'DO',
+    'ECUADOR':'EC',
+    'EGYPT':'EG',
+    'EL SALVADOR':'SV',
+    'EQUATORIAL GUINEA':'GQ',
+    'ERITREA':'ER',
+    'ESTONIA':'EE',
+    'ESWATINI':'SZ',
+    'ETHIOPIA':'ET',
+    'FIJI':'FJ',
+    'FINLAND':'FI',
+    'FRANCE':'FR',
+    'GABON':'GA',
+    'GAMBIA':'GM',
+    'GEORGIA':'GE',
+    'GERMANY':'DE',
+    'GHANA':'GH',
+    'GREECE':'GR',
+    'GRENADA':'GD',
+    'GUATEMALA':'GT',
+    'GUINEA':'GN',
+    'GUINEA-BISSAU':'GW',
+    'GUYANA':'GY',
+    'HAITI':'HT',
+    'HOLLAND':'NL',
+    'HONDURAS':'HN',
+    'HUNGARY':'HU',
+    'ICELAND':'IS',
+    'INDIA':'IN',
+    'INDONESIA':'ID',
+    'IRAN':'IR',
+    'IRAQ':'IQ',
+    'IRELAND':'IE',
+    'ISRAEL':'IL',
+    'ITALY':'IT',
+    'JAMAICA':'JM',
+    'JAPAN':'JP',
+    'JORDAN':'JO',
+    'KAZAKHSTAN':'KZ',
+    'KENYA':'KE',
+    'KIRIBATI':'KI',
+    'KUWAIT':'KW',
+    'KYRGYZSTAN':'KG',
+    'LAOS':'LA',
+    'LATVIA':'LV',
+    'LEBANON':'LB',
+    'LESOTHO':'LS',
+    'LIBERIA':'LR',
+    'LIBYA':'LY',
+    'LIECHTENSTEIN':'LI',
+    'LITHUANIA':'LT',
+    'LUXEMBOURG':'LU',
+    'MADAGASCAR':'MG',
+    'MALAWI':'MW',
+    'MALAYSIA':'MY',
+    'MALDIVES':'MV',
+    'MALI':'ML',
+    'MALTA':'MT',
+    'MARSHALL ISLANDS':'MH',
+    'MAURITANIA':'MR',
+    'MAURITIUS':'MU',
+    'MEXICO':'MX',
+    'MICRONESIA':'FM',
+    'MOLDOVA':'MD',
+    'MONACO':'MC',
+    'MONGOLIA':'MN',
+    'MONTENEGRO':'ME',
+    'MOROCCO':'MA',
+    'MOZAMBIQUE':'MZ',
+    'MYANMAR':'MM',
+    'NAMIBIA':'NA',
+    'NAURU':'NR',
+    'NEPAL':'NP',
+    'NETHERLANDS':'NL',
+    'NEW ZEALAND':'NZ',
+    'NICARAGUA':'NI',
+    'NIGER':'NE',
+    'NIGERIA':'NG',
+    'NORTH KOREA':'KP',
+    'NORTH MACEDONIA':'MK',
+    'NORWAY':'NO',
+    'OMAN':'OM',
+    'PAKISTAN':'PK',
+    'PALAU':'PW',
+    'PANAMA':'PA',
+    'PAPUA NEW GUINEA':'PG',
+    'PARAGUAY':'PY',
+    'PERU':'PE',
+    'PHILIPPINES':'PH',
+    'POLAND':'PL',
+    'PORTUGAL':'PT',
+    'QATAR':'QA',
+    'ROMANIA':'RO',
+    'RUSSIA':'RU',
+    'RWANDA':'RW',
+    'SAINT KITTS AND NEVIS':'KN',
+    'SAINT LUCIA':'LC',
+    'SAINT VINCENT AND THE GRENADINES':'VC',
+    'SAMOA':'WS',
+    'SAN MARINO':'SM',
+    'SAO TOME AND PRINCIPE':'ST',
+    'SAUDI ARABIA':'SA',
+    'SENEGAL':'SN',
+    'SERBIA':'RS',
+    'SEYCHELLES':'SC',
+    'SIERRA LEONE':'SL',
+    'SINGAPORE':'SG',
+    'SLOVAKIA':'SK',
+    'SLOVENIA':'SI',
+    'SOLOMON ISLANDS':'SB',
+    'SOMALIA':'SO',
+    'SOUTH AFRICA':'ZA',
+    'SOUTH KOREA':'KR',
+    'SOUTH SUDAN':'SS',
+    'SPAIN':'ES',
+    'SRI LANKA':'LK',
+    'SUDAN':'SD',
+    'SURINAME':'SR',
+    'SWEDEN':'SE',
+    'SWITZERLAND':'CH',
+    'SYRIA':'SY',
+    'TAIWAN':'TW',
+    'TAJIKISTAN':'TJ',
+    'TANZANIA':'TZ',
+    'THAILAND':'TH',
+    'TOGO':'TG',
+    'TONGA':'TO',
+    'TRINIDAD AND TOBAGO':'TT',
+    'TUNISIA':'TN',
+    'TURKEY':'TR',
+    'TURKMENISTAN':'TM',
+    'TUVALU':'TV',
+    'U.S.':'US',
+    'U.S.A.':'US',
+    'UGANDA':'UG',
+    'UK':'GB',
+    'UKRAINE':'UA',
+    'UNITED ARAB EMIRATES':'AE',
+    'UNITED KINGDOM':'GB',
+    'UNITED STATES':'US',
+    'URUGUAY':'UY',
+    'USA':'US',
+    'UZBEKISTAN':'UZ',
+    'VANUATU':'VU',
+    'VATICAN CITY':'VA',
+    'VENEZUELA':'VE',
+    'VIETNAM':'VN',
+    'YEMEN':'YE',
+    'ZAMBIA':'ZM',
+    'ZIMBABWE':'ZW'
+  };
+
+  const key = n.toUpperCase();
+  return map[key] || n;
+}
+
+function postProcessAllData(){
+  if(!allData || !allData.length) return;
+  allData.forEach(row=>{
+    // Normalize country to 2-letter where possible (e.g., Germany -> DE)
+    row.country = countryNameToCode(row.country);
+  });
+}
+
+function computeUnitPrice(total, qty){
+  const t = Number(total);
+  const q = Number(qty);
+  if(isFinite(t) && isFinite(q) && q > 0) return (t / q);
+  return '';
+}
+
+function buildDescartesRowSkeleton(meta){
+  return {
+    InvoiceNumber: meta.invoice_number || '',
+    InvoiceDate: meta.invoice_date || '',
+    InvoiceTotal: meta.invoice_total || '',
+    SupplierMID: meta.supplier_mid || '',
+    SupplierName: meta.supplier_name || (meta.supplier || 'Vieler International') || '',
+    BuyerPartNumber: '',
+    SupplierPartNumber: '',
+    Quantity: '',
+    UnitOfMeasure: '',
+    Description: '',
+    UnitPrice: '',
+    ItemTotal: '',
+    CurrencyCode: 'EUR',
+    ExchangeRate: '1',
+    CountryOfOrigin: '',
+    CountryOfExport: '',
+    DateOfExport: '',
+    PortOfLading: '',
+    RelatedParty: '',
+    PO_Number: '',
+    PO_Date: '',
+    GrossWeight: '',
+    GrossWeightUnit: '',
+    NetWeight: '',
+    TariffNumber: '',
+    TariffDescription: '',
+    Quantity1: '',
+    UnitOfMeasure1: '',
+    Quantity2: '',
+    UnitOfMeasure2: '',
+    Quantity3: '',
+    UnitOfMeasure3: '',
+    PrimarySPI: '',
+    SecondarySPI: '',
+    DeliverTo: '',
+    SoldTo: '',
+    SellerMID: '',
+    ShipperMID: '',
+    EntryDate: '',
+    ArrivalDate: '',
+    Carrier: '',
+    Vessel: '',
+    Voyage: '',
+    PortOfEntry: '',
+    PortOfUnloading: '',
+    LocationCode: '',
+    TotalCharges: '',
+    BillOfLadingNumber: '',
+    Container: '',
+    SecondaryTariffNumber: '',
+    SecondaryTariffdescription: '',
+    'Secondary Quantity1': '',
+    Secondaryunitofmeasure1: '',
+    secondaryquantity2: '',
+    secondaryunitofmeasure2: '',
+    secondaryquantity3: '',
+    secondaryunitofmeasure3: '',
+    secondaryvalue: '',
+    FTZStatus: '',
+    'FTZPrivilegedDate ': '',
+    ThirdTariffNumber: '',
+    ThirdTariffDescription: '',
+    ThirdTariffQuantity1: '',
+    ThirdTariffUnitOfMeasure1: '',
+    ThirdTariffQuantity2: '',
+    ThirdTariffUnitOfMeasure2: '',
+    ThirdTariffQuantity3: '',
+    ThirdTariffUnitOfMeasure3: '',
+    'Third Value': '',
+    '4TariffNumber': '',
+    '4TariffDescription': '',
+    '4TariffQuantity1': '',
+    '4TariffUnitOfMeasure1': '',
+    '4TariffQuantity2': '',
+    '4TariffUnitOfMeasure2': '',
+    '4TariffQuantity3': '',
+    '4TariffUnitOfMeasure3': '',
+    '4 Value': '',
+    '5TariffNumber': '',
+    '5TariffDescription': '',
+    '5TariffQuantity1': '',
+    '5TariffUnitOfMeasure1': '',
+    '5TariffQuantity2': '',
+    '5TariffUnitOfMeasure2': '',
+    '5TariffQuantity3': '',
+    '5TariffUnitOfMeasure3': '',
+    '5 Value': ''
+  };
+}
+
+function exportToDescartesAll(){
+  if(!allData || !allData.length){
+    showAlert('No data to export!', 'danger');
+    return;
+  }
+
+  // Sort by invoice, then line_number
+  const rows = allData.slice().sort((a,b)=>{
+    const ai = String(a.invoice_number||'');
+    const bi = String(b.invoice_number||'');
+    if(ai !== bi) return ai.localeCompare(bi);
+    return Number(a.line_number||0) - Number(b.line_number||0);
+  });
+
+  const exportRows = [];
+  rows.forEach(item=>{
+    const inv = item.invoice_number;
+    const meta = invoiceMetadata[inv] || {};
+    const baseTariff = getBaseTariff(item.hts_code);
+    const commonMeta = {
+      invoice_number: inv,
+      invoice_date: meta.invoice_date || item.invoice_date || '',
+      invoice_total: meta.invoice_total || item.invoice_total || '',
+      supplier: meta.supplier || item.supplier || 'Vieler International',
+      supplier_name: meta.supplier || item.supplier || 'Vieler International',
+      supplier_mid: '' // left blank unless you want to map from a MID sheet
+    };
+
+    // Check if this item is 100% Steel or 100% Aluminium
+    let is100PercentMaterial = null;
+    if(item.materials && item.materials.length){
+      const steelMat = item.materials.find(m => m.type === 'Steel');
+      const alumMat = item.materials.find(m => m.type === 'Aluminium');
+      
+      // Calculate total weight for this line item
+      const totalWeight = (item.quantity || 0) * (item.net_weight_pc || 0);
+      const tolerance = totalWeight * 0.02; // 2% tolerance for rounding
+      
+      // Check Steel: either percentage >= 100 OR steel kg equals total weight
+      if (steelMat && steelMat.kg > 0 && (steelMat.percentage >= 100 || Math.abs(steelMat.kg - totalWeight) < tolerance)) {
+        console.log(`[100% Detection] Line ${item.line_number} ${item.article_number}: Detected as 100% Steel`);
+        console.log(`  Total Weight: ${totalWeight.toFixed(3)} kg, Steel: ${steelMat.kg} kg, Diff: ${Math.abs(steelMat.kg - totalWeight).toFixed(3)} kg, Tolerance: ${tolerance.toFixed(3)} kg`);
+        is100PercentMaterial = 'Steel';
+      } 
+      // Check Aluminium: either percentage >= 100 OR alum kg equals total weight
+      else if (alumMat && alumMat.kg > 0 && (alumMat.percentage >= 100 || Math.abs(alumMat.kg - totalWeight) < tolerance)) {
+        console.log(`[100% Detection] Line ${item.line_number} ${item.article_number}: Detected as 100% Alum`);
+        console.log(`  Total Weight: ${totalWeight.toFixed(3)} kg, Alum: ${alumMat.kg} kg, Diff: ${Math.abs(alumMat.kg - totalWeight).toFixed(3)} kg, Tolerance: ${tolerance.toFixed(3)} kg`);
+        is100PercentMaterial = 'Alum';
+      }
+    }
+
+    // If 100% material, export ONE line with "All Steel/Alum - {part}" and original values
+    if (is100PercentMaterial) {
+      const base = buildDescartesRowSkeleton(commonMeta);
+      const partNum = String(item.article_number || '').trim();
+      
+      base.BuyerPartNumber = `All ${is100PercentMaterial} - ${partNum}`;
+      base.SupplierPartNumber = `All ${is100PercentMaterial} - ${partNum}`;
+      base.Quantity = (item.quantity != null ? item.quantity : '');
+      base.UnitOfMeasure = String(item.unit || 'EA');
+      base.Description = String(item.description || '').trim();
+      base.ItemTotal = (item.line_total != null ? item.line_total : '');
+      const up = computeUnitPrice(item.line_total, item.quantity);
+      base.UnitPrice = up === '' ? '' : up;
+      base.NetWeight = (item.net_weight_pc != null ? item.net_weight_pc : '');
+      base.CountryOfOrigin = String(item.country || '').trim();
+      base.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
+      exportRows.push(base);
+    } else {
+      // Not 100% material - export base item plus material breakdown lines
+
+      // Base item row
+      const base = buildDescartesRowSkeleton(commonMeta);
+      base.BuyerPartNumber = String(item.article_number || '').trim();
+      base.SupplierPartNumber = String(item.article_number || '').trim();
+      base.Quantity = (item.quantity != null ? item.quantity : '');
+      base.UnitOfMeasure = String(item.unit || 'EA');
+      base.Description = String(item.description || '').trim();
+      base.ItemTotal = (item.line_total != null ? item.line_total : '');
+      const up = computeUnitPrice(item.line_total, item.quantity);
+      base.UnitPrice = up === '' ? '' : up;
+      base.NetWeight = (item.net_weight_pc != null ? item.net_weight_pc : '');
+      base.CountryOfOrigin = String(item.country || '').trim();
+      base.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
+      exportRows.push(base);
+
+      // Add Steel / Aluminium material breakdown rows
+      if(item.materials && item.materials.length){
+        item.materials.forEach(mat=>{
+          if(mat.type !== 'Steel' && mat.type !== 'Aluminium') return;
+
+          const r = buildDescartesRowSkeleton(commonMeta);
+          const part = (mat.type === 'Steel')
+            ? makeSteelAlumPart(baseTariff || normalizeTariffDigits(item.hts_code), 'Steel')
+            : makeSteelAlumPart(baseTariff || normalizeTariffDigits(item.hts_code), 'Alum');
+
+          r.BuyerPartNumber = part;
+          r.SupplierPartNumber = part;
+          r.Quantity = (mat.kg != null ? mat.kg : '');
+          r.UnitOfMeasure = 'KG';
+          r.Description = `${mat.type} content for ${String(item.article_number||'').trim()}`;
+          r.ItemTotal = (mat.value != null ? mat.value : '');
+          const mup = computeUnitPrice(mat.value, mat.kg);
+          r.UnitPrice = mup === '' ? '' : mup;
+          r.NetWeight = (mat.kg != null ? mat.kg : '');
+          r.CountryOfOrigin = String(item.country || '').trim();
+          r.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
+          exportRows.push(r);
+        });
+      }
+    }
+  });
+
+  // Use the provided template if it is present beside the HTML; otherwise fall back to headers-only workbook.
+  const templateName = 'descartes_ci_upload.xlsx';
+  const templateUrl = './' + templateName;
+
+  const headers = Object.keys(buildDescartesRowSkeleton({})); // matches template columns we know
+  const aoa = [headers];
+  exportRows.forEach(r=>{
+    aoa.push(headers.map(h => (r[h] != null ? r[h] : '')));
+  });
+
+  // Try to fetch and preserve the template (sheet name + header row), then overwrite rows starting at row 2.
+  fetch(templateUrl).then(res=>{
+    if(!res.ok) throw new Error('Template not found next to HTML ('+templateName+').');
+    return res.arrayBuffer();
+  }).then(buf=>{
+    const wb = XLSX.read(buf, {type:'array'});
+    const sheetName = wb.SheetNames[0] || 'DescartesUpload';
+    const ws = wb.Sheets[sheetName] || wb.Sheets[wb.SheetNames[0]];
+    // Write data starting from A1 (headers) then rows
+    const newWs = XLSX.utils.aoa_to_sheet(aoa);
+    wb.Sheets[sheetName] = newWs;
+    const outName = `Vieler_Descartes_ALL_${new Date().toISOString().split('T')[0]}.xlsx`;
+    XLSX.writeFile(wb, outName);
+    showAlert(`Exported ${exportRows.length} rows (all invoices) to ${outName}`, 'success');
+  }).catch(err=>{
+    console.warn('[Descartes Export] Falling back to generated workbook:', err);
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    XLSX.utils.book_append_sheet(wb, ws, 'DescartesUpload');
+    const outName = `Vieler_Descartes_ALL_${new Date().toISOString().split('T')[0]}.xlsx`;
+    XLSX.writeFile(wb, outName);
+    showAlert(`Exported ${exportRows.length} rows (all invoices) to ${outName} (no template found).`, 'success');
+  });
+}
 
   /* =================== EXPORT TO IES =================== */
   function exportToIES() {
