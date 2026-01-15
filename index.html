@@ -1151,12 +1151,23 @@ function getSecondaryHTSFromDbByPrimary(primaryPartNum){
   if(!vielerDb || !vielerDb.length) return '';
   const key = String(primaryPartNum || '').trim();
   if(!key) return '';
-  const row = vielerDb.find(r => String(r['PRIMARY PART NUM'] ?? '').trim() === key);
+  const keyNorm = key.toUpperCase();
+  const row = vielerDb.find(r => String(r['PRIMARY PART NUM'] ?? '').trim().toUpperCase() === keyNorm);
   if(!row) return '';
   const secRaw = String(row['TARIFF NUM_1'] ?? row['TARIFF NUM 1'] ?? row['Tariff 1'] ?? row['TARIFF1'] ?? '').trim();
   if(!secRaw) return '';
   const digits = secRaw.replace(/\D/g,'');
   return digits || secRaw;
+}
+
+function getSecondaryHTSForAllMaterial(baseTariffDigits, materialType){
+  // For 100% material lines exported as "ALL STEEL {hts}" or "ALL ALUMINUM {hts}",
+  // pull the secondary tariff from the matching ALL-* row in the DB (not the plain STEEL/ALUMINUM row).
+  const mt = String(materialType || '').toUpperCase();
+  const baseKey = String(baseTariffDigits || '').replace(/\D/g,'');
+  if(!baseKey) return '';
+  const matKey = (mt.startsWith('STEEL') ? 'ALL STEEL' : 'ALL ALUMINUM');
+  return getSecondaryHTSFromDbByPrimary(`${matKey} ${baseKey}`);
 }
 
 function getSecondaryHTSForMaterial(baseTariffDigits, materialType){
@@ -1574,7 +1585,9 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
       // For 100% material lines (ALL STEEL / ALL ALUMINUM), export tariffs into Secondary/Third
       if (is100PercentMaterial && baseHTSToUse) {
         const baseKey = String(baseHTSToUse).replace(/\D/g,'');
-        const sec = getSecondaryHTSForMaterial(baseKey, (is100PercentMaterial === 'Steel' ? 'Steel' : 'Aluminium'));
+        // IMPORTANT: For ALL STEEL / ALL ALUMINUM export rows, use the ALL-* key when reading TARIFF NUM_1.
+        // (Example: ALL ALUMINUM 8302423065 has a different TARIFF NUM_1 than ALUMINUM 8302423065.)
+        const sec = getSecondaryHTSForAllMaterial(baseKey, (is100PercentMaterial === 'Steel' ? 'Steel' : 'Aluminium'));
         if (sec) base.SecondaryTariffNumber = String(sec).trim();
         base.ThirdTariffNumber = baseKey || String(baseHTSToUse).trim();
 
