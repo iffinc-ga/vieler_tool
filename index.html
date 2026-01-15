@@ -1516,9 +1516,26 @@ function exportToDescartesAll(){
       base.ItemTotal = (item.line_total != null ? item.line_total : '');
       const up = computeUnitPrice(item.line_total, item.quantity);
       base.UnitPrice = up === '' ? '' : up;
-      base.NetWeight = (((item.quantity||0) * (item.net_weight_pc||0)) ? ((item.quantity||0) * (item.net_weight_pc||0)) : '');
+      // Put TOTAL net weight into 'Secondary Quantity1' per requirements
+      const totalNetWeightKg = (item.quantity || 0) * (item.net_weight_pc || 0);
+      base['Secondary Quantity1'] = (totalNetWeightKg ? totalNetWeightKg : '');
+      base.NetWeight = ''; // keep NetWeight blank on main line
+      // If this is an ALL STEEL line, also put Quantity into ThirdTariffQuantity1
+      if (is100PercentMaterial === 'Steel') {
+        base.ThirdTariffQuantity1 = (item.quantity != null ? item.quantity : '');
+      }
       base.CountryOfOrigin = String(item.country || '').trim();
-      base.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
+      // Do not export HTS codes in Tariff fields
+      base.TariffNumber = '';
+      base.TariffDescription = '';
+      base.SecondaryTariffNumber = '';
+      base.SecondaryTariffdescription = '';
+      base.ThirdTariffNumber = '';
+      base.ThirdTariffDescription = '';
+      base['4TariffNumber'] = '';
+      base['4TariffDescription'] = '';
+      base['5TariffNumber'] = '';
+      base['5TariffDescription'] = '';
       exportRows.push(base);
     } else {
       // Not 100% material - export base item plus material breakdown lines
@@ -1533,7 +1550,8 @@ function exportToDescartesAll(){
 
       // Compute TOTAL net weight for this line (kg): (weight per piece) * (pieces)
       const totalNetWeightKg = (item.quantity || 0) * (item.net_weight_pc || 0);
-      base.NetWeight = (totalNetWeightKg ? totalNetWeightKg : '');
+      base['Secondary Quantity1'] = (totalNetWeightKg ? totalNetWeightKg : '');
+      base.NetWeight = ''; // keep NetWeight blank on main line
 
       // Allocate ItemTotal to Steel/Aluminium rows based on percentage, and reduce base accordingly.
       const lineTotal = (item.line_total != null ? Number(item.line_total) : NaN);
@@ -1572,7 +1590,17 @@ function exportToDescartesAll(){
       base.UnitPrice = upBase === '' ? '' : upBase;
 
       base.CountryOfOrigin = String(item.country || '').trim();
-      base.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
+      base.TariffNumber = '';
+      base.TariffDescription = '';
+      base.SecondaryTariffNumber = '';
+      base.SecondaryTariffdescription = '';
+      base.ThirdTariffNumber = '';
+      base.ThirdTariffDescription = '';
+      base['4TariffNumber'] = '';
+      base['4TariffDescription'] = '';
+      base['5TariffNumber'] = '';
+      base['5TariffDescription'] = '';
+      
       exportRows.push(base);
 
       // Add Steel / Aluminium material breakdown rows
@@ -1618,7 +1646,17 @@ function exportToDescartesAll(){
           r.UnitPrice = mup === '' ? '' : mup;
           r.NetWeight = (matKgRounded !== '' ? matKgRounded : '');
           r.CountryOfOrigin = String(item.country || '').trim();
-          r.TariffNumber = baseTariff || normalizeTariffDigits(item.hts_code);
+          r.TariffNumber = '';
+          r.TariffDescription = '';
+          r.SecondaryTariffNumber = '';
+          r.SecondaryTariffdescription = '';
+          r.ThirdTariffNumber = '';
+          r.ThirdTariffDescription = '';
+          r['4TariffNumber'] = '';
+          r['4TariffDescription'] = '';
+          r['5TariffNumber'] = '';
+          r['5TariffDescription'] = '';
+          
           exportRows.push(r);
         });
       }
