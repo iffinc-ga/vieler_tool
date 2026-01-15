@@ -1146,6 +1146,28 @@ function getSecondaryHTSFromDb(articleNumber){
   return digits || secRaw;
 }
 
+function getSecondaryHTSFromDbByPrimary(primaryPartNum){
+  // Look up TARIFF NUM_1 by exact PRIMARY PART NUM match.
+  if(!vielerDb || !vielerDb.length) return '';
+  const key = String(primaryPartNum || '').trim();
+  if(!key) return '';
+  const row = vielerDb.find(r => String(r['PRIMARY PART NUM'] ?? '').trim() === key);
+  if(!row) return '';
+  const secRaw = String(row['TARIFF NUM_1'] ?? row['TARIFF NUM 1'] ?? row['Tariff 1'] ?? row['TARIFF1'] ?? '').trim();
+  if(!secRaw) return '';
+  const digits = secRaw.replace(/\D/g,'');
+  return digits || secRaw;
+}
+
+function getSecondaryHTSForMaterial(baseTariffDigits, materialType){
+  // materialType: 'Steel' or 'Aluminium' (or 'Alum')
+  const mt = String(materialType || '').toUpperCase();
+  const matKey = (mt.startsWith('STEEL') ? 'STEEL' : 'ALUMINUM');
+  const baseKey = String(baseTariffDigits || '').replace(/\D/g,'');
+  if(!baseKey) return '';
+  return getSecondaryHTSFromDbByPrimary(`${matKey} ${baseKey}`);
+}
+
 
 
 function countryNameToCode(name){
@@ -1550,11 +1572,11 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
       base.ThirdTariffDescription = '';
 
       // For 100% material lines (ALL STEEL / ALL ALUMINUM), export tariffs into Secondary/Third
-      if (is100PercentMaterial && baseTariff) {
-        const baseKey = String(baseTariff).replace(/\D/g,'');
-        const sec = (tariffExtraMap && tariffExtraMap[baseKey] ? tariffExtraMap[baseKey].secondaryTariff : '');
-        if (sec) base.SecondaryTariffNumber = sec;
-        base.ThirdTariffNumber = baseKey || String(baseTariff).trim();
+      if (is100PercentMaterial && baseHTSToUse) {
+        const baseKey = String(baseHTSToUse).replace(/\D/g,'');
+        const sec = getSecondaryHTSForMaterial(baseKey, (is100PercentMaterial === 'Steel' ? 'Steel' : 'Aluminium'));
+        if (sec) base.SecondaryTariffNumber = String(sec).trim();
+        base.ThirdTariffNumber = baseKey || String(baseHTSToUse).trim();
 
         const u = (uomMap && uomMap[baseKey]) ? uomMap[baseKey] : { uom1:'', uom2:'' };
         const q = (item.quantity != null ? item.quantity : '');
@@ -1724,12 +1746,12 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
           r.TariffNumber = '';
           r.TariffDescription = '';
 
-          // For Steel/Aluminum content lines, populate SecondaryTariffNumber (9903...) from DB mapping (tariffExtraMap)
-          // and set Secondary Quantity1 to match NetWeight.
+          // For Steel/Aluminum content lines, populate SecondaryTariffNumber (9903...) from DB using the material + base tariff key (e.g., "STEEL 8302423065").
+          // Secondary Quantity1 should mirror NetWeight.
           r.SecondaryTariffNumber = '';
           try {
-            // For material content lines, take the secondary (9903...) tariff directly from the DB by part number.
-            const sec = getSecondaryHTSFromDb(item.article_number);
+            const baseKey = String((getBaseHTSFromDb(item.article_number) || baseTariff || normalizeTariffDigits(item.hts_code) || '')).replace(/\D/g,'');
+            const sec = getSecondaryHTSForMaterial(baseKey, mat.type);
             if (sec) r.SecondaryTariffNumber = String(sec).trim();
           } catch(e) {}
           r['Secondary Quantity1'] = (r.NetWeight !== '' ? r.NetWeight : '');
