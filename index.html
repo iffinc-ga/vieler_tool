@@ -113,7 +113,7 @@
     <span class="db-status db-loading" id="dbStatus">Loading database from repository...</span>
     <button class="btn-light" id="retryDbBtn" title="Retry loading from GitHub">Retry Load</button>
     <button class="btn-warning" id="offlineBtn" title="Skip DB load and work offline">Work Offline</button>
-    <div class="db-info" id="dbInfo">Fetching updated_vieler.xlsx from GitHub…</div>
+    <div class="db-info" id="dbInfo">Fetching updated_vieler_db.xlsx from GitHub…</div>
   </div>
 
   <div class="upload-section" id="uploadSection">
@@ -184,6 +184,9 @@
   let uploadedPdfName = '';
   let vielerDb = [];
   let htsCodesDb = [];
+  let uomDb = [];
+  let uomMap = {}; // baseTariff -> {uom1,uom2}
+  let tariffExtraMap = {}; // baseTariff -> {secondaryTariff}
   let invoiceMetadata = {}; // NEW: Store metadata per invoice
   
   // Undo stack
@@ -1516,14 +1519,11 @@ function exportToDescartesAll(){
       base.ItemTotal = (item.line_total != null ? item.line_total : '');
       const up = computeUnitPrice(item.line_total, item.quantity);
       base.UnitPrice = up === '' ? '' : up;
-      // Put TOTAL net weight into 'Secondary Quantity1' per requirements
+      // Net weight handling for template export
       const totalNetWeightKg = (item.quantity || 0) * (item.net_weight_pc || 0);
-      base['Secondary Quantity1'] = (totalNetWeightKg ? totalNetWeightKg : '');
-      base.NetWeight = ''; // keep NetWeight blank on main line
-      // If this is an ALL STEEL line, also put Quantity into ThirdTariffQuantity1
-      if (is100PercentMaterial === 'Steel') {
-        base.ThirdTariffQuantity1 = (item.quantity != null ? item.quantity : '');
-      }
+      let secondaryQty1ForMain = (totalNetWeightKg ? (Math.round(totalNetWeightKg * 100) / 100) : '');
+      base.NetWeight = ''; // keep NetWeight blank on main line (we use Secondary Quantity1 instead)
+base['Secondary Quantity1'] = secondaryQty1ForMain;
       base.CountryOfOrigin = String(item.country || '').trim();
       // Do not export HTS codes in Tariff fields
       base.TariffNumber = '';
@@ -1532,6 +1532,31 @@ function exportToDescartesAll(){
       base.SecondaryTariffdescription = '';
       base.ThirdTariffNumber = '';
       base.ThirdTariffDescription = '';
+
+      // For 100% material lines (ALL STEEL / ALL ALUMINUM), export tariffs into Secondary/Third
+      if (is100PercentMaterial && baseTariff) {
+        const baseKey = String(baseTariff).replace(/\D/g,'');
+        const sec = (tariffExtraMap && tariffExtraMap[baseKey] ? tariffExtraMap[baseKey].secondaryTariff : '');
+        if (sec) base.SecondaryTariffNumber = sec;
+        base.ThirdTariffNumber = baseKey || String(baseTariff).trim();
+
+        const u = (uomMap && uomMap[baseKey]) ? uomMap[baseKey] : { uom1:'', uom2:'' };
+        const q = (item.quantity != null ? item.quantity : '');
+        const w = (secondaryQty1ForMain !== '' ? secondaryQty1ForMain : (totalNetWeightKg ? (Math.round(totalNetWeightKg*100)/100) : ''));
+
+        // Clear then set based on UOM tab
+        base.ThirdTariffQuantity1 = '';
+        base.ThirdTariffQuantity2 = '';
+        if (u.uom1) {
+          base.ThirdTariffQuantity1 = (String(u.uom1).toUpperCase() === 'NO') ? q : (String(u.uom1).toUpperCase() === 'KG') ? w : q;
+        } else {
+          // Fallback: NO for most steel/alum lines
+          base.ThirdTariffQuantity1 = q;
+        }
+        if (u.uom2) {
+          base.ThirdTariffQuantity2 = (String(u.uom2).toUpperCase() === 'NO') ? q : (String(u.uom2).toUpperCase() === 'KG') ? w : '';
+        }
+      }
       base['4TariffNumber'] = '';
       base['4TariffDescription'] = '';
       base['5TariffNumber'] = '';
@@ -1565,6 +1590,35 @@ function exportToDescartesAll(){
         if (steelMat && steelMat.percentage != null && steelMat.percentage !== '') steelPct = Number(steelMat.percentage);
         if (alumMat  && alumMat.percentage  != null && alumMat.percentage  !== '') alumPct  = Number(alumMat.percentage);
       }
+      // --- Weight allocation for material lines ---
+      // Default: round each material weight UP to whole KG (min 1 KG).
+      // Exception: if rounding would exceed the item's total net weight (common on very small weights with multiple materials),
+      // use the unrounded proportional weights instead.
+      const materialWeightUsed = {}; // type -> numeric (kg) or ''
+      if (item.materials && item.materials.length && (steelPct > 0 || alumPct > 0) && totalNetWeightKg) {
+        const mats = [];
+        if (steelPct > 0) mats.push({ type: 'Steel', pct: steelPct });
+        if (alumPct > 0)  mats.push({ type: 'Aluminium', pct: alumPct });
+
+        const raw = mats.map(m => ({ type: m.type, kg: (totalNetWeightKg * (m.pct/100)) }));
+        const rounded = raw.map(r => ({ type: r.type, kg: Math.max(1, Math.ceil(r.kg)) }));
+        const sumRounded = rounded.reduce((s,r)=>s + (isFinite(r.kg)?r.kg:0), 0);
+
+        const useRounded = !(mats.length >= 2 && sumRounded > totalNetWeightKg);
+        raw.forEach(r=>{
+          const val = useRounded ? Math.max(1, Math.ceil(r.kg)) : (Math.round(r.kg * 100) / 100);
+          materialWeightUsed[r.type] = val;
+        });
+
+        // Main line carries the remaining (non-metal) net weight
+        const sumUsed = Object.values(materialWeightUsed).reduce((s,v)=>s + (isFinite(v)?v:0), 0);
+        const remaining = Math.max(0, (Math.round((totalNetWeightKg - sumUsed) * 100) / 100));
+        // Only apply remaining-weight logic when this is NOT a 100% material line
+        if (!is100PercentMaterial) {
+          secondaryQty1ForMain = (remaining ? remaining : '');
+        }
+      }
+
 
       function round2(n){
         if (n == null || !isFinite(n)) return '';
@@ -1618,17 +1672,22 @@ function exportToDescartesAll(){
 
           // Weight for content lines: round UP to whole KG, minimum 1 KG.
           // Prefer parsed mat.kg; otherwise derive from percentage of total line weight.
-          let matKg = (mat.kg != null && mat.kg !== '' ? Number(mat.kg) : NaN);
-          if (!isFinite(matKg) || matKg <= 0) {
-            const pct = (mat.percentage != null && mat.percentage !== '' ? Number(mat.percentage) : NaN);
-            if (isFinite(pct) && pct > 0) matKg = totalNetWeightKg * (pct/100);
-          }
-          let matKgRounded = '';
-          if (isFinite(matKg) && matKg > 0) {
-            matKgRounded = Math.max(1, Math.ceil(matKg));
+          // Determine weight for this material line
+          let matKgOut = '';
+          const t = String(mat.type || '').trim();
+          if (materialWeightUsed && materialWeightUsed[t] != null && materialWeightUsed[t] !== '') {
+            matKgOut = materialWeightUsed[t];
+          } else {
+            // Fallback: use proportional weight if percentage exists, else parsed kg
+            let matKg = (mat.kg != null && mat.kg !== '' ? Number(mat.kg) : NaN);
+            if (!isFinite(matKg) || matKg <= 0) {
+              const pct = (mat.percentage != null && mat.percentage !== '' ? Number(mat.percentage) : NaN);
+              if (isFinite(pct) && pct > 0 && totalNetWeightKg) matKg = totalNetWeightKg * (pct/100);
+            }
+            if (isFinite(matKg) && matKg > 0) matKgOut = Math.max(1, Math.ceil(matKg));
           }
 
-          r.Quantity = (matKgRounded !== '' ? matKgRounded : '');
+          r.Quantity = (matKgOut !== '' ? matKgOut : '');
           r.UnitOfMeasure = 'KG';
           r.Description = `${mat.type} content for ${String(item.article_number||'').trim()}`;
 
@@ -1918,17 +1977,64 @@ function exportToDescartesAll(){
   }
 
   async function hydrateDbsFromWorkbook(workbook) {
-    if (workbook.SheetNames.includes('vieler_db')) {
-      vielerDb = XLSX.utils.sheet_to_json(workbook.Sheets['vieler_db']);
+    // Supports the user's updated DB: sheets 'UPDATED_VIELER' and 'UOM'
+    // (Also keeps backward compatibility with older sheet names.)
+    const sheetNameMain =
+      workbook.SheetNames.includes('UPDATED_VIELER') ? 'UPDATED_VIELER' :
+      (workbook.SheetNames.includes('vieler_db') ? 'vieler_db' : null);
+
+    if (sheetNameMain) {
+      vielerDb = XLSX.utils.sheet_to_json(workbook.Sheets[sheetNameMain], { defval: '' });
     } else {
-      console.warn('vieler_db sheet not found');
+      console.warn('[DB] Main sheet not found (expected UPDATED_VIELER or vieler_db).');
+      vielerDb = [];
     }
 
-    if (workbook.SheetNames.includes('hts_codes')) {
-      htsCodesDb = XLSX.utils.sheet_to_json(workbook.Sheets['hts_codes']);
+    const sheetNameUom =
+      workbook.SheetNames.includes('UOM') ? 'UOM' :
+      (workbook.SheetNames.includes('uom') ? 'uom' : null);
+
+    if (sheetNameUom) {
+      uomDb = XLSX.utils.sheet_to_json(workbook.Sheets[sheetNameUom], { defval: '' });
     } else {
-      console.warn('hts_codes sheet not found');
+      uomDb = [];
     }
+
+    // Optional/legacy hts_codes sheet (not required for export logic below)
+    if (workbook.SheetNames.includes('hts_codes')) {
+      htsCodesDb = XLSX.utils.sheet_to_json(workbook.Sheets['hts_codes'], { defval: '' });
+    } else {
+      htsCodesDb = htsCodesDb || [];
+    }
+
+    // Build UOM map: baseTariff -> uom1/uom2
+    uomMap = {};
+    (uomDb || []).forEach(r => {
+      const t = String(r[' Tariff Code'] ?? r['Tariff Code'] ?? r['TARIFF CODE'] ?? r['Tariff'] ?? '').trim();
+      if (!t) return;
+      const key = t.replace(/\D/g,''); // digits only
+      if (!key) return;
+      uomMap[key] = {
+        uom1: String(r['UOM1'] ?? '').trim(),
+        uom2: String(r['UOM2'] ?? '').trim()
+      };
+    });
+
+    // Build extra tariff map: baseTariff -> secondaryTariff (e.g., 9903....)
+    tariffExtraMap = {};
+    (vielerDb || []).forEach(r => {
+      const base = String(r['TARIFF NUM'] ?? r['Tariff'] ?? r['TARIFF'] ?? '').trim();
+      if (!base) return;
+      const baseKey = base.replace(/\D/g,'');
+      if (!baseKey) return;
+
+      // Prefer TARIFF NUM_1 as the "additional" (often 9903...)
+      const t1 = String(r['TARIFF NUM_1'] ?? r['TARIFF NUM 1'] ?? r['Tariff 1'] ?? '').trim();
+      if (t1) {
+        const sec = t1.replace(/\D/g,'') || t1;
+        tariffExtraMap[baseKey] = { secondaryTariff: sec };
+      }
+    });
   }
 
   function enterOfflineMode(reason) {
