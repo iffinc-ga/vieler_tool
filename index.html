@@ -1131,6 +1131,22 @@ function getBaseHTSFromDb(articleNumber){
   return baseHTS || '';
 }
 
+function getSecondaryHTSFromDb(articleNumber){
+  // Return the additional/secondary tariff (often 9903...) for an article number from UPDATED_VIELER.
+  // Uses column TARIFF NUM_1 (or close variants). Returns digits-only string when possible.
+  if(!vielerDb || !vielerDb.length) return '';
+  const artNum = String(articleNumber || '').trim();
+  if(!artNum) return '';
+  // Try the same primary key logic used elsewhere
+  const row = vielerDb.find(r => String(r['PRIMARY PART NUM'] ?? r['Primary Part Num'] ?? r['PRIMARY PART'] ?? r['PART'] ?? r['Article'] ?? r['Article Number'] ?? '').trim() === artNum);
+  if(!row) return '';
+  const secRaw = String(row['TARIFF NUM_1'] ?? row['TARIFF NUM 1'] ?? row['Tariff 1'] ?? row['TARIFF1'] ?? '').trim();
+  if(!secRaw) return '';
+  const digits = secRaw.replace(/\D/g,'');
+  return digits || secRaw;
+}
+
+
 
 function countryNameToCode(name){
   const n = String(name||'').trim();
@@ -1712,12 +1728,10 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
           // and set Secondary Quantity1 to match NetWeight.
           r.SecondaryTariffNumber = '';
           try {
-            const matBaseTariff = baseTariff || normalizeTariffDigits(item.hts_code);
-            const matKey = String(matBaseTariff || '').replace(/\\D/g,'');
-            const secObj = (tariffExtraMap && matKey && tariffExtraMap[matKey]) ? tariffExtraMap[matKey] : null;
-            if (secObj && secObj.secondaryTariff) r.SecondaryTariffNumber = String(secObj.secondaryTariff).trim();
+            // For material content lines, take the secondary (9903...) tariff directly from the DB by part number.
+            const sec = getSecondaryHTSFromDb(item.article_number);
+            if (sec) r.SecondaryTariffNumber = String(sec).trim();
           } catch(e) {}
-
           r['Secondary Quantity1'] = (r.NetWeight !== '' ? r.NetWeight : '');
 
           r.SecondaryTariffdescription = '';
