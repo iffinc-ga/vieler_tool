@@ -1707,7 +1707,19 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
           r.CountryOfOrigin = String(item.country || '').trim();
           r.TariffNumber = '';
           r.TariffDescription = '';
+
+          // For Steel/Aluminum content lines, populate SecondaryTariffNumber (9903...) from DB mapping (tariffExtraMap)
+          // and set Secondary Quantity1 to match NetWeight.
           r.SecondaryTariffNumber = '';
+          try {
+            const matBaseTariff = baseTariff || normalizeTariffDigits(item.hts_code);
+            const matKey = String(matBaseTariff || '').replace(/\\D/g,'');
+            const secObj = (tariffExtraMap && matKey && tariffExtraMap[matKey]) ? tariffExtraMap[matKey] : null;
+            if (secObj && secObj.secondaryTariff) r.SecondaryTariffNumber = String(secObj.secondaryTariff).trim();
+          } catch(e) {}
+
+          r['Secondary Quantity1'] = (r.NetWeight !== '' ? r.NetWeight : '');
+
           r.SecondaryTariffdescription = '';
           r.ThirdTariffNumber = '';
           r.ThirdTariffDescription = '';
