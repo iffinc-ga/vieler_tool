@@ -1100,7 +1100,7 @@ function getBaseHTSFromDb(articleNumber){
   
   // Find matching record in database
   const dbRecord = vielerDb.find(rec => {
-    const dbArt = String(rec['Article Number'] || rec['article_number'] || rec['Article'] || '').trim();
+    const dbArt = String(rec['Article Number'] || rec['article_number'] || rec['Article'] || rec['PRIMARY PART NUM'] || rec['PRIMARY PART NUMBER'] || rec['PRIMARY PART'] || rec['PRIMARY_PART_NUM'] || '').trim();
     return dbArt === artNum;
   });
   
@@ -1110,7 +1110,7 @@ function getBaseHTSFromDb(articleNumber){
   }
   
   // Get HTS code from database (try different possible column names)
-  const htsRaw = dbRecord['HTS Code'] || dbRecord['hts_code'] || dbRecord['HTS'] || dbRecord['Tariff'] || '';
+  const htsRaw = dbRecord['HTS Code'] || dbRecord['hts_code'] || dbRecord['HTS'] || dbRecord['Tariff'] || dbRecord['TARIFF NUM'] || dbRecord['TARIFF'] || dbRecord['TARIFF NUM_0'] || '';
   const htsStr = String(htsRaw).trim();
   
   if(!htsStr) {
@@ -1703,7 +1703,7 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
           r.ItemTotal = (alloc !== '' ? alloc : '');
           const mup = computeUnitPrice(r.ItemTotal, r.Quantity);
           r.UnitPrice = mup === '' ? '' : mup;
-          r.NetWeight = (matKgRounded !== '' ? matKgRounded : '');
+          r.NetWeight = (matKgOut !== '' ? matKgOut : '');
           r.CountryOfOrigin = String(item.country || '').trim();
           r.TariffNumber = '';
           r.TariffDescription = '';
