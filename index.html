@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>Vieler Invoice PDF Parser & IES Generator (Multi-Invoice)</title>
+  <title>Vieler Invoice PDF Parser & IES Generator (Multi-Invoice) - FIXED</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
@@ -133,9 +133,9 @@
 
   <div class="controls" id="controls">
     <select id="invoiceSelect"><option value="">Select an invoice...</option></select>
-    <button class="btn-warning" onclick="undoLast()" title="Undo last action">↩️ Undo</button>
-    <button class="btn-success" onclick="exportToDescartesAll()">📤 Export to Descartes Template (All Invoices)</button>
-            <button class="btn-primary" onclick="resetUpload()">📤 New Upload</button>
+    <button type="button" class="btn-warning" onclick="undoLast()" title="Undo last action">↩️ Undo</button>
+    <button type="button" class="btn-success" onclick="exportToDescartesAll()">📤 Export to Descartes Template (All Invoices)</button>
+    <button type="button" class="btn-primary" onclick="resetUpload()">📤 New Upload</button>
     <span class="inline-help">Yellow rows show Aluminium/Steel/Copper lines (editable). Use ➕ Below to insert rows like the Grass tool.</span>
   </div>
 
@@ -308,208 +308,215 @@
     allData = [];
     invoiceMetadata = {};
     invoiceOrder = [];
-
+    
+    // Track current invoice context
     let currentInvoiceNum = '';
     let currentInvoiceDate = '';
     let currentInvoiceTotal = 0;
-
-    // Collect text with positions (x + y)
+    
+    // Collect all text from all pages with position info
     let allItems = [];
     const numPages = pdf.numPages;
-
-    console.log('=== STARTING MULTI-INVOICE PDF PARSE (IMPROVED) ===');
+    
+    console.log('=== STARTING MULTI-INVOICE PDF PARSE ===');
     console.log('Number of pages:', numPages);
-
+    
     for (let pageNum = 1; pageNum <= numPages; pageNum++) {
       const page = await pdf.getPage(pageNum);
       const textContent = await page.getTextContent();
-
+      
+      // Collect items with their y-position for grouping
       textContent.items.forEach(item => {
         allItems.push({
           text: item.str,
-          x: item.transform[4],
           y: item.transform[5],
           page: pageNum
         });
       });
     }
-
-    // Sort by page, then top-to-bottom, then left-to-right
+    
+    console.log('Total text items collected:', allItems.length);
+    
+    // CRITICAL FIX: Sort by page first, then by Y-position (descending) within each page
+    // This ensures page 1 items come before page 2, etc.
     allItems.sort((a, b) => {
-      if (a.page !== b.page) return a.page - b.page;
-      const dy = b.y - a.y;
-      if (Math.abs(dy) > 0.01) return dy;
-      return a.x - b.x;
+      if (a.page !== b.page) {
+        return a.page - b.page; // Page order first
+      }
+      return b.y - a.y; // Y-position descending (top to bottom) within same page
     });
-
-    // Group into lines (page + similar y), preserve left-to-right order
+    
+    console.log('Items sorted by page and Y-position');
+    
+    // Group items by line (similar y-position and same page)
     const lines = [];
     let currentLine = [];
-    let lastY = null;
-    let lastPage = null;
-    const Y_TOL = 2.5;
-
-    function flushLine() {
-      if (!currentLine.length) return;
-      currentLine.sort((a, b) => a.x - b.x);
-      const txt = currentLine.map(o => o.text).join(' ').replace(/\s+/g, ' ').trim();
-      lines.push({ text: txt, page: lastPage });
-      currentLine = [];
-    }
-
-    for (const it of allItems) {
-      if (lastPage === it.page && lastY !== null && Math.abs(it.y - lastY) < Y_TOL) {
-        currentLine.push(it);
+    let lastY = -1;
+    let lastPage = -1;
+    
+    allItems.forEach(item => {
+      if (lastPage === item.page && Math.abs(item.y - lastY) < 2) {
+        currentLine.push(item.text);
       } else {
-        flushLine();
-        currentLine = [it];
-        lastPage = it.page;
-        lastY = it.y;
+        if (currentLine.length > 0) {
+          lines.push({
+            text: currentLine.join(' '),
+            page: lastPage
+          });
+        }
+        currentLine = [item.text];
       }
+      lastY = item.y;
+      lastPage = item.page;
+    });
+    if (currentLine.length > 0) {
+      lines.push({
+        text: currentLine.join(' '),
+        page: lastPage
+      });
     }
-    flushLine();
-
+    
     console.log('Grouped into', lines.length, 'lines');
-
-    // ---------- Invoice detection helpers ----------
-    function detectInvoiceNumberFromText(t) {
-      // Standard headers
-      let m = t.match(/(?:Collective\s+Invoice\s+No\.?|Invoice\s+No\.?)/i);
-      if (m) {
-        const m2 = t.match(/(?:Collective\s+Invoice\s+No\.?|Invoice\s+No\.?)\s*:?\s*(\d{6,10})/i);
-        if (m2) return m2[1];
-      }
-
-      // German-style / document-style lines:
-      // e.g., "7344306 12/19/2025 ..."
-      m = t.match(/^\s*(\d{6,10})\s+(\d{1,2}[\/\.]\d{1,2}[\/\.]\d{4})/);
-      if (m) return m[1];
-
-      // Sometimes: "Rechnung-Nr." label is present elsewhere; number alone on a line
-      m = t.match(/^\s*(\d{6,10})\s*$/);
-      if (m) return m[1];
-
-      return null;
-    }
-
-    function detectInvoiceLabelNoNumber(t) {
-      return /(?:Collective\s+Invoice\s+No\.?|Invoice\s+No\.?|Rechnung-?Nr\.?)/i.test(t);
-    }
-
-    // First pass: build page -> invoice map, invoice order, metadata
-    const pageInvoiceMap = {}; // page -> invoice #
-    let scanInvoice = '';
-
-    for (let i = 0; i < lines.length; i++) {
-      const t = lines[i].text;
-      const p = lines[i].page;
-
-      let inv = detectInvoiceNumberFromText(t);
-
-      // Handle split headers: line has label but number is on next line(s)
-      if (!inv && detectInvoiceLabelNoNumber(t)) {
-        for (let k = 1; k <= 3 && (i + k) < lines.length; k++) {
-          const t2 = lines[i + k].text;
-          const m2 = t2.match(/(\d{6,10})/);
-          if (m2) { inv = m2[1]; break; }
-        }
-      }
-
-      if (inv) {
-        scanInvoice = inv;
-
-        if (!invoiceOrder.includes(inv)) invoiceOrder.push(inv);
-
-        // Try to find date near the invoice header
-        let invDate = (invoiceMetadata[inv] && invoiceMetadata[inv].invoice_date) || '';
-        if (!invDate) {
-          for (let j = i; j < Math.min(i + 25, lines.length); j++) {
-            const dm = lines[j].text.match(/(\d{1,2}[\/\.]\d{1,2}[\/\.]\d{4})/);
-            if (dm) { invDate = dm[1].replace(/\./g, '/'); break; }
-          }
-        }
-
-        // Try to find "Value of merchandise" total
-        let invTotal = (invoiceMetadata[inv] && invoiceMetadata[inv].invoice_total) || 0;
-        if (!invTotal) {
-          for (let j = i; j < lines.length; j++) {
-            const tm = lines[j].text.match(/([0-9,]+\.[0-9]{2})\s+EUR\s+Value\s+of\s+merchandise/i);
-            if (tm) { invTotal = parseFloat(tm[1].replace(/,/g, '')); break; }
-            if (j > i && detectInvoiceLabelNoNumber(lines[j].text) && detectInvoiceNumberFromText(lines[j].text)) break;
-          }
-        }
-
-        invoiceMetadata[inv] = {
-          invoice_number: inv,
-          invoice_date: invDate,
-          invoice_total: invTotal
-        };
-      }
-
-      // Map each page to the most recently detected invoice
-      if (scanInvoice) pageInvoiceMap[p] = scanInvoice;
-    }
-
-    // Second pass: parse items, using pageInvoiceMap fallback
+    
+    // Parse line items and detect invoice boundaries
     let currentItem = null;
     let lineNumberInInvoice = 0;
-
-    function finalizeCurrentItem() {
-      if (currentItem && (currentItem.quantity > 0 || currentItem.line_total > 0)) {
-        allData.push(currentItem);
-      }
-      currentItem = null;
-    }
-
+    
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].text;
       const pageNum = lines[i].page;
-
-      // If invoice not set yet, infer from page
-      if (!currentInvoiceNum && pageInvoiceMap[pageNum]) {
-        currentInvoiceNum = pageInvoiceMap[pageNum];
-        const meta = invoiceMetadata[currentInvoiceNum] || {};
-        currentInvoiceDate = meta.invoice_date || '';
-        currentInvoiceTotal = meta.invoice_total || 0;
-        lineNumberInInvoice = 0;
-      }
-
-      // Detect new invoice boundary
-      let inv = detectInvoiceNumberFromText(line);
-      if (!inv && detectInvoiceLabelNoNumber(line)) {
-        for (let k = 1; k <= 3 && (i + k) < lines.length; k++) {
-          const t2 = lines[i + k].text;
-          const m2 = t2.match(/(\d{6,10})/);
-          if (m2) { inv = m2[1]; break; }
-        }
-      }
-      if (inv && inv !== currentInvoiceNum) {
-        finalizeCurrentItem();
-
-        currentInvoiceNum = inv;
-        const meta = invoiceMetadata[currentInvoiceNum] || {};
-        currentInvoiceDate = meta.invoice_date || '';
-        currentInvoiceTotal = meta.invoice_total || 0;
-        lineNumberInInvoice = 0;
-
-        if (!invoiceOrder.includes(currentInvoiceNum)) invoiceOrder.push(currentInvoiceNum);
+      
+      // DETECT NEW INVOICE - FIXED to handle number BEFORE or AFTER "Invoice No."
+      // Handles both: "Invoice No. 7344306" and "7344307 Collective Invoice No."
+      let invMatch = null;
+      let newInvoiceNum = null;
+      
+      // Skip payment term lines
+      const lowerLine = line.toLowerCase();
+      if (lowerLine.includes('60 days') || lowerLine.includes('in favour of')) {
         continue;
       }
-
-      if (!currentInvoiceNum) continue;
-
-      // Item line
+      
+      // Try pattern 1: Number AFTER "Invoice No." (e.g., "Invoice No. 7344306")
+      invMatch = line.match(/(?:Collective\s+)?Invoice\s+No\.?\s*:?\s*(\d{7})/i);
+      if (invMatch) {
+        newInvoiceNum = invMatch[1];
+      } else {
+        // Try pattern 2: Number BEFORE "Collective Invoice No." (e.g., "7344307 Collective Invoice No.")
+        invMatch = line.match(/(\d{7})\s+Collective\s+Invoice\s+No\./i);
+        if (invMatch) {
+          newInvoiceNum = invMatch[1];
+        }
+      }
+      
+      if (newInvoiceNum) {
+        
+        // If this is a different invoice number, start a new invoice context
+        if (newInvoiceNum !== currentInvoiceNum) {
+          console.log(`\n>>> NEW INVOICE DETECTED: ${newInvoiceNum} (Page ${pageNum})`);
+          
+          // Save previous item if any
+          if (currentItem && (currentItem.quantity > 0 || currentItem.line_total > 0)) {
+            allData.push(currentItem);
+            currentItem = null;
+          }
+          
+          // Update invoice context
+          const isFirstInvoice = !currentInvoiceNum;
+          currentInvoiceNum = newInvoiceNum;
+          lineNumberInInvoice = 0;
+          
+          // Add to invoice order if not already present
+          if (!invoiceOrder.includes(currentInvoiceNum)) {
+            invoiceOrder.push(currentInvoiceNum);
+          }
+          
+          // Extract date and total for this invoice
+          currentInvoiceDate = '';
+          currentInvoiceTotal = 0;
+          
+          // Look for date in next few lines
+          for (let j = i; j < Math.min(i + 20, lines.length); j++) {
+            const dateMatch = lines[j].text.match(/(\d{1,2}[\/\.]\d{1,2}[\/\.]\d{4})/);
+            if (dateMatch && !currentInvoiceDate) {
+              currentInvoiceDate = dateMatch[1].replace(/\./g, '/');
+              console.log('  Invoice date:', currentInvoiceDate);
+              break;
+            }
+          }
+          
+          // Look for "Value of merchandise" in remaining lines on this and subsequent pages
+          let totalFound = false;
+          for (let j = i; j < lines.length; j++) {
+            // More flexible pattern to handle various whitespace
+            const totalMatch = lines[j].text.match(/([0-9,]+\.[0-9]{2})\s+EUR\s+Value\s+of\s+merchandise/i);
+            if (totalMatch) {
+              currentInvoiceTotal = parseFloat(totalMatch[1].replace(/,/g, ''));
+              console.log('  Invoice total:', currentInvoiceTotal);
+              totalFound = true;
+              break;
+            }
+            
+            // Stop looking after we've gone through a reasonable number of pages
+            if (lines[j].page > pageNum + 35) break; // Increased from 15 to 35 for longer invoices
+            
+            // If we find a NEW invoice before finding the total, stop
+            if (j > i && lines[j].text.match(/(?:Collective\s+Invoice\s+No\.?|Invoice\s+No\.?)/i)) {
+              break;
+            }
+          }
+          
+          if (!totalFound) {
+            console.log('  Invoice total: NOT FOUND - will keep looking');
+          }
+          
+          // Store metadata
+          invoiceMetadata[currentInvoiceNum] = {
+            invoice_number: currentInvoiceNum,
+            invoice_date: currentInvoiceDate,
+            invoice_total: currentInvoiceTotal
+          };
+          
+          // If this is the FIRST invoice, update any items that were created before invoice number was found
+          if (isFirstInvoice && allData.length > 0) {
+            console.log(`  Updating ${allData.length} items with first invoice metadata`);
+            for (let k = 0; k < allData.length; k++) {
+              if (!allData[k].invoice_number) {
+                allData[k].invoice_number = currentInvoiceNum;
+                allData[k].invoice_date = currentInvoiceDate;
+                allData[k].invoice_total = currentInvoiceTotal;
+              }
+            }
+            // Set lineNumberInInvoice to the count of items we just updated
+            lineNumberInInvoice = allData.length;
+          }
+        }
+        continue;
+      }
+      
+      // Check if this is a new item line (starts with item number like "001")
       const itemStartMatch = line.match(/^\s*(\d{3})\s+([0-9.]+)\s+(.+)/);
+      
       if (itemStartMatch) {
-        finalizeCurrentItem();
-
+        // Save previous item
+        if (currentItem && (currentItem.quantity > 0 || currentItem.line_total > 0)) {
+          allData.push(currentItem);
+          console.log(`  ✓ Saved item ${currentItem.item_number}: ${currentItem.description.substring(0, 30)} (qty: ${currentItem.quantity}, total: ${currentItem.line_total})`);
+        } else if (currentItem) {
+          console.log(`  ✗ Skipped item ${currentItem.item_number}: ${currentItem.description.substring(0, 30)} (qty: ${currentItem.quantity}, total: ${currentItem.line_total})`);
+        }
+        
         lineNumberInInvoice++;
         const itemNum = itemStartMatch[1];
         const articleNum = itemStartMatch[2];
         const restOfLine = itemStartMatch[3];
-
-        const qtyPriceMatch = restOfLine.match(/(.+?)\s+(\d+(?:\.\d+)?)\s+([\d.]+)\s+ne\s+([0-9,]+\.[0-9]{2})/);
-
+        
+        console.log(`  Found item line: ${itemNum} ${articleNum} ${restOfLine.substring(0, 40)}`);
+        
+        // Try to extract quantity, price, and total
+        // Quantity can have commas (e.g., 1,360)
+        const qtyPriceMatch = restOfLine.match(/(.+?)\s+([\d,]+(?:\.[\d,]+)?)\s+([\d.]+)\s+ne\s+([0-9,]+\.\d{2})/);
+        
         currentItem = {
           invoice_number: currentInvoiceNum,
           invoice_date: currentInvoiceDate,
@@ -528,142 +535,198 @@
           hts_code: '',
           materials: []
         };
-
+        
         if (qtyPriceMatch) {
           currentItem.description = qtyPriceMatch[1].trim();
-          currentItem.quantity = parseFloat(qtyPriceMatch[2]);
+          currentItem.quantity = parseFloat(qtyPriceMatch[2].replace(/,/g, '')); // Remove commas
           currentItem.unit_price = parseFloat(qtyPriceMatch[3]);
           currentItem.line_total = parseFloat(qtyPriceMatch[4].replace(/,/g, ''));
         } else {
           currentItem.description = restOfLine.trim();
-
+          
           // Look ahead for quantity/price
-          for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+          for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
             const nextLine = lines[j].text;
-            const qtyMatch = nextLine.match(/^(\d+(?:\.\d+)?)\s+([\d.]+)\s+ne\s+([0-9,]+\.[0-9]{2})/);
+            const qtyMatch = nextLine.match(/^([\d,]+(?:\.[\d,]+)?)\s+([\d.]+)\s+ne\s+([0-9,]+\.\d{2})/);
             if (qtyMatch) {
-              currentItem.quantity = parseFloat(qtyMatch[1]);
+              currentItem.quantity = parseFloat(qtyMatch[1].replace(/,/g, '')); // Remove commas
               currentItem.unit_price = parseFloat(qtyMatch[2]);
               currentItem.line_total = parseFloat(qtyMatch[3].replace(/,/g, ''));
               break;
             }
           }
         }
-        continue;
       }
-
-      // Extra fields for current item
-      if (!currentItem) continue;
-
-      // HTS code
-      if (line.includes('HTSUS#-code:')) {
-        const htsMatch = line.match(/HTSUS#-code:\s*([0-9.]+)/);
-        if (htsMatch) currentItem.hts_code = htsMatch[1];
-      }
-
-      // Country
-      if (line.toLowerCase().includes('country of manufact')) {
-        const countryMatch = line.match(/Country\s+of\s+Manufact\w*\s*:\s*([^
-
-]+)$/i);
-        if (countryMatch) currentItem.country = String(countryMatch[1]).trim();
-      }
-
-      // Net weight
-      if (line.includes('Net weight')) {
-        const weightMatch = line.match(/Net\s+weight[\/\s]*pc:\s*([0-9.]+)\s*KG/i);
-        if (weightMatch) currentItem.net_weight_pc = parseFloat(weightMatch[1]);
-      }
-
-      // Material blocks
-      function parseMaterial(type, re, extraParser) {
-        const m = line.match(re);
-        if (!m) return;
-        if (parseFloat(m[1]) <= 0) return;
-
-        const kg = parseFloat(m[1]);
-        const pct = parseFloat(m[2]);
-
-        let value = 0;
-        const valMatch = line.match(/value:\s*([0-9.]+)\s*€/i);
-        if (valMatch) value = parseFloat(valMatch[1]);
-
-        const mat = { type, kg, percentage: pct, value };
-        if (extraParser) extraParser(mat);
-
-        currentItem.materials.push(mat);
-      }
-
-      parseMaterial('Aluminium', /Aluminium:\s*([0-9.]+)\s*kg\s*[\/\s]*([0-9.]+)\s*%/i, (mat) => {
-        let smelt = '', cast = '';
-        for (let j = i; j < Math.min(i + 4, lines.length); j++) {
-          const t = lines[j].text;
-          if (t.includes('smelt:') && !smelt) {
-            const mm = t.match(/smelt:\s*([A-Za-z]+)/i);
-            if (mm) smelt = mm[1];
-          }
-          if (t.includes('cast:') && !cast) {
-            const mm = t.match(/cast:\s*([A-Za-z]+)/i);
-            if (mm) cast = mm[1];
+      
+      // Extract additional data for current item
+      if (currentItem) {
+        // HTS code
+        if (line.includes('HTSUS#-code:')) {
+          const htsMatch = line.match(/HTSUS#-code:\s*([0-9.]+)/);
+          if (htsMatch) currentItem.hts_code = htsMatch[1];
+        }
+        
+        // Country (tolerant of 'Manufacturing', 'Manufacture', and common typo 'Manufactoring')
+        if (line.toLowerCase().includes('country of manufact')) {
+          const countryMatch = line.match(/Country\s+of\s+Manufact\w*\s*:\s*(.+?)(?:\s*$|\s{2,})/i);
+          if (countryMatch) currentItem.country = String(countryMatch[1]).trim();
+        }
+        
+        // Net weight
+        if (line.includes('Net weight')) {
+          const weightMatch = line.match(/Net\s+weight[\/\s]*pc:\s*([0-9.]+)\s*KG/i);
+          if (weightMatch) currentItem.net_weight_pc = parseFloat(weightMatch[1]);
+        }
+        
+        // Aluminium
+        if (line.includes('Aluminium:')) {
+          const alumMatch = line.match(/Aluminium:\s*([0-9.]+)\s*kg\s*[\/\s]*([0-9.]+)\s*%/i);
+          if (alumMatch && parseFloat(alumMatch[1]) > 0) {
+            const kg = parseFloat(alumMatch[1]);
+            const pct = parseFloat(alumMatch[2]);
+            
+            let value = 0;
+            const valMatch = line.match(/value:\s*([0-9.]+)\s*€/i);
+            if (valMatch) value = parseFloat(valMatch[1]);
+            
+            let smelt = '', cast = '';
+            for (let j = i; j < Math.min(i + 3, lines.length); j++) {
+              const nextLine = lines[j].text;
+              if (nextLine.includes('smelt:') && !smelt) {
+                const smeltMatch = nextLine.match(/smelt:\s*([A-Za-z]+)/i);
+                if (smeltMatch) smelt = smeltMatch[1];
+              }
+              if (nextLine.includes('cast:')) {
+                const castMatch = nextLine.match(/cast:\s*([A-Za-z]+)/i);
+                if (castMatch) cast = castMatch[1];
+              }
+            }
+            
+            currentItem.materials.push({
+              type: 'Aluminium',
+              kg: kg,
+              percentage: pct,
+              value: value,
+              smelt: smelt,
+              cast: cast
+            });
           }
         }
-        mat.smelt = smelt;
-        mat.cast = cast;
-      });
-
-      parseMaterial('Steel', /Steel:\s*([0-9.]+)\s*kg\s*[\/\s]*([0-9.]+)\s*%/i, (mat) => {
-        let melt = '', smelt = '', pour = '';
-        for (let j = i; j < Math.min(i + 4, lines.length); j++) {
-          const t = lines[j].text;
-          if (t.includes('melt:') && !melt) {
-            const mm = t.match(/melt:\s*([A-Za-z]+)/i);
-            if (mm) melt = mm[1];
-          }
-          if (t.includes('smelt:') && !smelt) {
-            const mm = t.match(/smelt:\s*([A-Za-z]+)/i);
-            if (mm) smelt = mm[1];
-          }
-          if (t.includes('pour:') && !pour) {
-            const mm = t.match(/pour:\s*([A-Za-z]+)/i);
-            if (mm) pour = mm[1];
-          }
-        }
-        mat.melt = melt;
-        mat.smelt = smelt;
-        mat.pour = pour;
-      });
-
-      parseMaterial('Copper', /Copper:\s*([0-9.]+)\s*kg\s*[\/\s]*([0-9.]+)\s*%/i, (mat) => {
-        let melt = '', smelt = '', pour = '';
-        for (let j = i; j < Math.min(i + 4, lines.length); j++) {
-          const t = lines[j].text;
-          if (t.includes('melt:') && !melt) {
-            const mm = t.match(/melt:\s*([A-Za-z]+)/i);
-            if (mm) melt = mm[1];
-          }
-          if (t.includes('smelt:') && !smelt) {
-            const mm = t.match(/smelt:\s*([A-Za-z]+)/i);
-            if (mm) smelt = mm[1];
-          }
-          if (t.includes('pour:') && !pour) {
-            const mm = t.match(/pour:\s*([A-Za-z]+)/i);
-            if (mm) pour = mm[1];
+        
+        // Steel
+        if (line.includes('Steel:')) {
+          const steelMatch = line.match(/Steel:\s*([0-9.]+)\s*kg\s*[\/\s]*([0-9.]+)\s*%/i);
+          if (steelMatch && parseFloat(steelMatch[1]) > 0) {
+            const kg = parseFloat(steelMatch[1]);
+            const pct = parseFloat(steelMatch[2]);
+            
+            let value = 0;
+            const valMatch = line.match(/value:\s*([0-9.]+)\s*€/i);
+            if (valMatch) value = parseFloat(valMatch[1]);
+            
+            let melt = '', smelt = '', pour = '';
+            for (let j = i; j < Math.min(i + 3, lines.length); j++) {
+              const nextLine = lines[j].text;
+              if (nextLine.includes('melt:') && !melt) {
+                const meltMatch = nextLine.match(/melt:\s*([A-Za-z]+)/i);
+                if (meltMatch) melt = meltMatch[1];
+              }
+              if (nextLine.includes('smelt:') && !smelt) {
+                const smeltMatch = nextLine.match(/smelt:\s*([A-Za-z]+)/i);
+                if (smeltMatch) smelt = smeltMatch[1];
+              }
+              if (nextLine.includes('pour:')) {
+                const pourMatch = nextLine.match(/pour:\s*([A-Za-z]+)/i);
+                if (pourMatch) pour = pourMatch[1];
+              }
+            }
+            
+            currentItem.materials.push({
+              type: 'Steel',
+              kg: kg,
+              percentage: pct,
+              value: value,
+              melt: melt,
+              smelt: smelt,
+              pour: pour
+            });
           }
         }
-        mat.melt = melt;
-        mat.smelt = smelt;
-        mat.pour = pour;
-      });
-
-      parseMaterial('Others', /Others:\s*([0-9.]+)\s*kg\s*[\/\s]*([0-9.]+)\s*%/i);
+        
+        // Copper
+        if (line.includes('Copper:')) {
+          const copperMatch = line.match(/Copper:\s*([0-9.]+)\s*kg\s*[\/\s]*([0-9.]+)\s*%/i);
+          if (copperMatch && parseFloat(copperMatch[1]) > 0) {
+            const kg = parseFloat(copperMatch[1]);
+            const pct = parseFloat(copperMatch[2]);
+            
+            let value = 0;
+            const valMatch = line.match(/value:\s*([0-9.]+)\s*€/i);
+            if (valMatch) value = parseFloat(valMatch[1]);
+            
+            let melt = '', smelt = '', pour = '';
+            for (let j = i; j < Math.min(i + 3, lines.length); j++) {
+              const nextLine = lines[j].text;
+              if (nextLine.includes('melt:') && !melt) {
+                const meltMatch = nextLine.match(/melt:\s*([A-Za-z]+)/i);
+                if (meltMatch) melt = meltMatch[1];
+              }
+              if (nextLine.includes('smelt:') && !smelt) {
+                const smeltMatch = nextLine.match(/smelt:\s*([A-Za-z]+)/i);
+                if (smeltMatch) smelt = smeltMatch[1];
+              }
+              if (nextLine.includes('pour:')) {
+                const pourMatch = nextLine.match(/pour:\s*([A-Za-z]+)/i);
+                if (pourMatch) pour = pourMatch[1];
+              }
+            }
+            
+            currentItem.materials.push({
+              type: 'Copper',
+              kg: kg,
+              percentage: pct,
+              value: value,
+              melt: melt,
+              smelt: smelt,
+              pour: pour
+            });
+          }
+        }
+        
+        // Others
+        if (line.includes('Others:')) {
+          const othersMatch = line.match(/Others:\s*([0-9.]+)\s*kg\s*[\/\s]*([0-9.]+)\s*%/i);
+          if (othersMatch && parseFloat(othersMatch[1]) > 0) {
+            const kg = parseFloat(othersMatch[1]);
+            const pct = parseFloat(othersMatch[2]);
+            
+            let value = 0;
+            const valMatch = line.match(/value:\s*([0-9.]+)\s*€/i);
+            if (valMatch) value = parseFloat(valMatch[1]);
+            
+            currentItem.materials.push({
+              type: 'Others',
+              kg: kg,
+              percentage: pct,
+              value: value
+            });
+          }
+        }
+      }
     }
-
-    finalizeCurrentItem();
-
-    console.log('\n=== MULTI-INVOICE PARSING COMPLETE (IMPROVED) ===');
+    
+    // Add last item
+    if (currentItem && (currentItem.quantity > 0 || currentItem.line_total > 0)) {
+      allData.push(currentItem);
+      console.log(`  ✓ Saved FINAL item ${currentItem.item_number}: ${currentItem.description.substring(0, 30)} (qty: ${currentItem.quantity}, total: ${currentItem.line_total})`);
+    } else if (currentItem) {
+      console.log(`  ✗ Skipped FINAL item ${currentItem.item_number}: ${currentItem.description.substring(0, 30)} (qty: ${currentItem.quantity}, total: ${currentItem.line_total})`);
+    }
+    
+    console.log('\n=== MULTI-INVOICE PARSING COMPLETE ===');
     console.log('Found', invoiceOrder.length, 'invoice(s):', invoiceOrder.join(', '));
     console.log('Successfully parsed', allData.length, 'total line items');
-
+    
     invoiceOrder.forEach(invNum => {
       const invItems = allData.filter(item => item.invoice_number === invNum);
       console.log(`  Invoice ${invNum}: ${invItems.length} items`);
@@ -1915,33 +1978,53 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
 
   /* =================== RESET =================== */
   function resetUpload() {
-    if (!confirm('Reset and upload new PDF? All unsaved changes will be lost.')) return;
-    
-    allData = [];
-    currentInvoice = '';
-    invoiceOrder = [];
-    invoiceMetadata = {};
-    undoStack = [];
-    
-    const alertEl = document.getElementById('alert');
-    if (alertEl) alertEl.style.display = 'none';
-    
-    uploadSection.style.display = 'block';
-    controls.style.display = 'none';
-    stats.style.display = 'none';
-    tableContainer.style.display = 'none';
-    loading.style.display = 'none';
-    
-    fileInput.value = '';
-    document.getElementById('tableBody').innerHTML = '';
-    
-    document.getElementById('statInvoice').textContent = '-';
-    document.getElementById('statDate').value = '';
-    document.getElementById('statSupplier').value = '';
-    document.getElementById('statTotal').value = '';
-    document.getElementById('statItems').textContent = '0';
-    document.getElementById('statSum').textContent = '€0.00';
-    document.getElementById('statDiff').textContent = '€0.00';
+    try {
+      console.log('resetUpload function called');
+      
+      if (!confirm('Reset and upload new PDF? All unsaved changes will be lost.')) {
+        console.log('User cancelled reset');
+        return;
+      }
+      
+      console.log('User confirmed, resetting...');
+      
+      allData = [];
+      currentInvoice = '';
+      invoiceOrder = [];
+      invoiceMetadata = {};
+      undoStack = [];
+      uploadedPdfName = '';
+      
+      const alertEl = document.getElementById('alert');
+      if (alertEl) alertEl.style.display = 'none';
+      
+      uploadSection.style.display = 'block';
+      controls.style.display = 'none';
+      stats.style.display = 'none';
+      tableContainer.style.display = 'none';
+      loading.style.display = 'none';
+      
+      fileInput.value = '';
+      document.getElementById('tableBody').innerHTML = '';
+      document.getElementById('invoiceSelect').innerHTML = '<option value="">Select an invoice...</option>';
+      
+      document.getElementById('statInvoice').textContent = '-';
+      document.getElementById('statDate').value = '';
+      document.getElementById('statSupplier').value = 'Vieler International';
+      document.getElementById('statTotal').value = '';
+      document.getElementById('statItems').textContent = '0';
+      document.getElementById('statSum').textContent = '€0.00';
+      document.getElementById('statDiff').textContent = '€0.00';
+      
+      console.log('Reset complete');
+
+      // Automatically open the PDF file picker
+      fileInput.click();
+
+    } catch (error) {
+      console.error('Error in resetUpload:', error);
+      alert('Error resetting: ' + error.message);
+    }
   }
 </script>
 
@@ -1990,34 +2073,27 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
 
     setDbBanner('loading', 'Loading database...', 'Trying GitHub (8s timeout)…');
     try {
-      const wb = await fetchAndReadWorkbook(remoteUrl, 8000);
+      const wb = await fetchAndReadWorkbook(remoteUrl, true);
       await hydrateDbsFromWorkbook(wb);
       setDbBanner('loaded', 'Database loaded ✓', `Loaded from GitHub at ${new Date().toLocaleString()}`);
       return;
     } catch (err1) {
       console.warn('[DB] GitHub load failed:', err1?.message || err1);
-      // If the user opened the HTML directly (file://), browsers often block fetching sibling files.
-      // In that case, skip the local fetch attempt and go straight to offline mode.
-      if (location && location.protocol === 'file:') {
-        enterOfflineMode('DB load failed (GitHub unreachable). You opened this tool via file://, so the local fallback cannot be fetched by the browser. Please use Work Offline, or host the folder with a simple local server if you want local DB loading.');
-        return;
-      }
-
-      setDbBanner('loading', 'Retrying from local file…', 'Looking for ./updated_vieler_db.xlsx (4s timeout)…');
+      setDbBanner('loading', 'Retrying from local file…', 'Looking for ./updated_vieler_db.xlsx');
       try {
-        const wb2 = await fetchAndReadWorkbook(localUrl, 4000);
+        const wb2 = await fetchAndReadWorkbook(localUrl, false);
         await hydrateDbsFromWorkbook(wb2);
         setDbBanner('loaded', 'Database loaded ✓ (local fallback)', `Loaded from local file at ${new Date().toLocaleString()}`);
         return;
       } catch (err2) {
         console.warn('[DB] Local fallback failed:', err2?.message || err2);
-        enterOfflineMode('DB load failed. Working offline. You can still parse/edit and export (limited enrichment).');
+        enterOfflineMode(`DB load failed. Working offline. You can still parse/edit and export (limited enrichment).`);
       }
     }
   }
 
-  async function fetchAndReadWorkbook(url, timeoutMs = 0) {
-    const res = timeoutMs && timeoutMs > 0 ? await abortableFetch(url, timeoutMs) : await fetch(url);
+  async function fetchAndReadWorkbook(url, useTimeout) {
+    const res = useTimeout ? await abortableFetch(url, 8000) : await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     const buf = await res.arrayBuffer();
     return XLSX.read(new Uint8Array(buf), { type: 'array' });
