@@ -1990,27 +1990,34 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
 
     setDbBanner('loading', 'Loading database...', 'Trying GitHub (8s timeout)…');
     try {
-      const wb = await fetchAndReadWorkbook(remoteUrl, true);
+      const wb = await fetchAndReadWorkbook(remoteUrl, 8000);
       await hydrateDbsFromWorkbook(wb);
       setDbBanner('loaded', 'Database loaded ✓', `Loaded from GitHub at ${new Date().toLocaleString()}`);
       return;
     } catch (err1) {
       console.warn('[DB] GitHub load failed:', err1?.message || err1);
-      setDbBanner('loading', 'Retrying from local file…', 'Looking for ./updated_vieler_db.xlsx');
+      // If the user opened the HTML directly (file://), browsers often block fetching sibling files.
+      // In that case, skip the local fetch attempt and go straight to offline mode.
+      if (location && location.protocol === 'file:') {
+        enterOfflineMode('DB load failed (GitHub unreachable). You opened this tool via file://, so the local fallback cannot be fetched by the browser. Please use Work Offline, or host the folder with a simple local server if you want local DB loading.');
+        return;
+      }
+
+      setDbBanner('loading', 'Retrying from local file…', 'Looking for ./updated_vieler_db.xlsx (4s timeout)…');
       try {
-        const wb2 = await fetchAndReadWorkbook(localUrl, false);
+        const wb2 = await fetchAndReadWorkbook(localUrl, 4000);
         await hydrateDbsFromWorkbook(wb2);
         setDbBanner('loaded', 'Database loaded ✓ (local fallback)', `Loaded from local file at ${new Date().toLocaleString()}`);
         return;
       } catch (err2) {
         console.warn('[DB] Local fallback failed:', err2?.message || err2);
-        enterOfflineMode(`DB load failed. Working offline. You can still parse/edit and export (limited enrichment).`);
+        enterOfflineMode('DB load failed. Working offline. You can still parse/edit and export (limited enrichment).');
       }
     }
   }
 
-  async function fetchAndReadWorkbook(url, useTimeout) {
-    const res = useTimeout ? await abortableFetch(url, 8000) : await fetch(url);
+  async function fetchAndReadWorkbook(url, timeoutMs = 0) {
+    const res = timeoutMs && timeoutMs > 0 ? await abortableFetch(url, timeoutMs) : await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     const buf = await res.arrayBuffer();
     return XLSX.read(new Uint8Array(buf), { type: 'array' });
