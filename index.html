@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>Vieler Invoice PDF Parser & IES Generator (Multi-Invoice) - FIXED</title>
+  <title>Vieler Invoice PDF Parser & IES Generator (Multi-Invoice) - IMPROVED FIX</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
@@ -104,8 +104,11 @@
 <body>
 <div class="container">
   <div class="header">
-    <h1>🏭 Vieler Invoice PDF Parser & IES Generator</h1>
+    <h1>🏭 Vieler Invoice PDF Parser & IES Generator - IMPROVED</h1>
     <p>Extract Vieler invoice data with material content breakdowns. Supports multiple invoices in one PDF. Export to IES format.</p>
+    <p style="margin-top:10px;font-size:14px;background:rgba(255,255,255,0.2);padding:10px;border-radius:4px;">
+      ✨ <strong>IMPROVEMENTS:</strong> Fixed parsing for line items with missing descriptions (like line 020) and improved handling of special characters and commas in descriptions and totals (lines 051-052).
+    </p>
   </div>
 
   <div class="db-section" id="dbSection">
@@ -318,7 +321,8 @@
     let allItems = [];
     const numPages = pdf.numPages;
     
-    console.log('=== STARTING MULTI-INVOICE PDF PARSE ===');
+    console.log('=== STARTING IMPROVED MULTI-INVOICE PDF PARSE ===');
+    console.log('Version: Improved parser with fixes for lines 020, 051, 052');
     console.log('Number of pages:', numPages);
     
     for (let pageNum = 1; pageNum <= numPages; pageNum++) {
@@ -494,7 +498,8 @@
         continue;
       }
       
-      // Check if this is a new item line (starts with item number like "001")
+      // IMPROVED LINE ITEM PARSING
+      // Pattern: 3-digit line number, article number (digits/dots), then either description or quantity
       const itemStartMatch = line.match(/^\s*(\d{3})\s+([0-9.]+)\s+(.+)/);
       
       if (itemStartMatch) {
@@ -511,11 +516,7 @@
         const articleNum = itemStartMatch[2];
         const restOfLine = itemStartMatch[3];
         
-        console.log(`  Found item line: ${itemNum} ${articleNum} ${restOfLine.substring(0, 40)}`);
-        
-        // Try to extract quantity, price, and total
-        // Quantity can have commas (e.g., 1,360)
-        const qtyPriceMatch = restOfLine.match(/(.+?)\s+([\d,]+(?:\.[\d,]+)?)\s+([\d.]+)\s+ne\s+([0-9,]+\.\d{2})/);
+        console.log(`  Found item line: ${itemNum} ${articleNum} ${restOfLine.substring(0, 50)}`);
         
         currentItem = {
           invoice_number: currentInvoiceNum,
@@ -536,23 +537,47 @@
           materials: []
         };
         
+        // TRY THREE DIFFERENT PATTERNS (in order of specificity)
+        
+        // Pattern 1: Description + Quantity + Price + "ne" + Total
+        // Example: "Connector r/h 20 31.52 ne 630.40"
+        // Matches: (description) (qty) (price) ne (total)
+        let qtyPriceMatch = restOfLine.match(/(.+?)\s+([\d,]+)\s+([\d.]+)\s+ne\s+([0-9,]+\.\d{2})/);
+        
         if (qtyPriceMatch) {
           currentItem.description = qtyPriceMatch[1].trim();
-          currentItem.quantity = parseFloat(qtyPriceMatch[2].replace(/,/g, '')); // Remove commas
+          currentItem.quantity = parseFloat(qtyPriceMatch[2].replace(/,/g, ''));
           currentItem.unit_price = parseFloat(qtyPriceMatch[3]);
           currentItem.line_total = parseFloat(qtyPriceMatch[4].replace(/,/g, ''));
+          console.log(`    → Pattern 1 (with description): desc="${currentItem.description}", qty=${currentItem.quantity}`);
         } else {
-          currentItem.description = restOfLine.trim();
+          // Pattern 2: NO description, just Quantity + Price + "ne" + Total
+          // Example: "200 0.03 ne 6.00" (for line 020 with missing description)
+          // Matches: (qty) (price) ne (total)
+          qtyPriceMatch = restOfLine.match(/^([\d,]+)\s+([\d.]+)\s+ne\s+([0-9,]+\.\d{2})/);
           
-          // Look ahead for quantity/price
-          for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
-            const nextLine = lines[j].text;
-            const qtyMatch = nextLine.match(/^([\d,]+(?:\.[\d,]+)?)\s+([\d.]+)\s+ne\s+([0-9,]+\.\d{2})/);
-            if (qtyMatch) {
-              currentItem.quantity = parseFloat(qtyMatch[1].replace(/,/g, '')); // Remove commas
-              currentItem.unit_price = parseFloat(qtyMatch[2]);
-              currentItem.line_total = parseFloat(qtyMatch[3].replace(/,/g, ''));
-              break;
+          if (qtyPriceMatch) {
+            currentItem.description = ''; // Empty description
+            currentItem.quantity = parseFloat(qtyPriceMatch[1].replace(/,/g, ''));
+            currentItem.unit_price = parseFloat(qtyPriceMatch[2]);
+            currentItem.line_total = parseFloat(qtyPriceMatch[3].replace(/,/g, ''));
+            console.log(`    → Pattern 2 (NO description): qty=${currentItem.quantity}, price=${currentItem.unit_price}`);
+          } else {
+            // Pattern 3: Description only, look ahead for quantity/price in next lines
+            currentItem.description = restOfLine.trim();
+            console.log(`    → Pattern 3 (description only): desc="${currentItem.description}", looking ahead`);
+            
+            // Look ahead for quantity/price in next few lines
+            for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+              const nextLine = lines[j].text;
+              const qtyMatch = nextLine.match(/^([\d,]+)\s+([\d.]+)\s+ne\s+([0-9,]+\.\d{2})/);
+              if (qtyMatch) {
+                currentItem.quantity = parseFloat(qtyMatch[1].replace(/,/g, ''));
+                currentItem.unit_price = parseFloat(qtyMatch[2]);
+                currentItem.line_total = parseFloat(qtyMatch[3].replace(/,/g, ''));
+                console.log(`    → Found qty/price in next line: qty=${currentItem.quantity}`);
+                break;
+              }
             }
           }
         }
