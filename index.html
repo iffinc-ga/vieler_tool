@@ -1694,8 +1694,7 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
 
       // Compute TOTAL net weight for this line (kg): (weight per piece) * (pieces)
       const totalNetWeightKg = (item.quantity || 0) * (item.net_weight_pc || 0);
-      base['Secondary Quantity1'] = (totalNetWeightKg ? totalNetWeightKg : '');
-      base.NetWeight = ''; // keep NetWeight blank on main line
+      base.NetWeight = ''; // keep NetWeight blank on main line (Secondary Quantity1 carries it)
 
       // Allocate ItemTotal to Steel/Aluminium rows based on percentage, and reduce base accordingly.
       const lineTotal = (item.line_total != null ? Number(item.line_total) : NaN);
@@ -1709,11 +1708,14 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
         if (steelMat && steelMat.percentage != null && steelMat.percentage !== '') steelPct = Number(steelMat.percentage);
         if (alumMat  && alumMat.percentage  != null && alumMat.percentage  !== '') alumPct  = Number(alumMat.percentage);
       }
+
       // --- Weight allocation for material lines ---
       // Default: round each material weight UP to whole KG (min 1 KG).
-      // Exception: if rounding would exceed the item's total net weight (common on very small weights with multiple materials),
-      // use the unrounded proportional weights instead.
+      // Exception: if rounding would exceed the item's total net weight (common on very small weights
+      // with multiple materials), use the unrounded proportional weights instead.
       const materialWeightUsed = {}; // type -> numeric (kg) or ''
+      let secondaryQty1ForMain = (totalNetWeightKg ? (Math.round(totalNetWeightKg * 100) / 100) : '');
+
       if (item.materials && item.materials.length && (steelPct > 0 || alumPct > 0) && totalNetWeightKg) {
         const mats = [];
         if (steelPct > 0) mats.push({ type: 'Steel', pct: steelPct });
@@ -1732,12 +1734,12 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
         // Main line carries the remaining (non-metal) net weight
         const sumUsed = Object.values(materialWeightUsed).reduce((s,v)=>s + (isFinite(v)?v:0), 0);
         const remaining = Math.max(0, (Math.round((totalNetWeightKg - sumUsed) * 100) / 100));
-        // Only apply remaining-weight logic when this is NOT a 100% material line
-        if (!is100PercentMaterial) {
-          secondaryQty1ForMain = (remaining ? remaining : '');
-        }
+        // Apply remaining weight to main line's Secondary Quantity1
+        secondaryQty1ForMain = (remaining ? remaining : '');
       }
 
+      // Set Secondary Quantity1 on main line AFTER computing remaining weight
+      base['Secondary Quantity1'] = secondaryQty1ForMain;
 
       function round2(n){
         if (n == null || !isFinite(n)) return '';
@@ -1773,10 +1775,11 @@ base['Secondary Quantity1'] = secondaryQty1ForMain;
       base['4TariffDescription'] = '';
       base['5TariffNumber'] = '';
       base['5TariffDescription'] = '';
-      
+
+      // *** PUSH MAIN (ORIGINAL) LINE FIRST ***
       exportRows.push(base);
 
-      // Add Steel / Aluminium material breakdown rows
+      // *** STEEL / ALUMINIUM CONTENT LINES — added AFTER the main line above ***
       if(item.materials && item.materials.length){
         item.materials.forEach(mat=>{
           if(mat.type !== 'Steel' && mat.type !== 'Aluminium') return;
